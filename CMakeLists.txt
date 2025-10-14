@@ -2,7 +2,7 @@
 
 if (EXISTS ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c)
     # Configuration WITH sockets (recommended for FreeRTOS)
-    add_executable(picow_freertos_ping
+    add_executable(project
             main.c                      # Main application file
             picow_freertos_ping.c       # TCP server functionality
             motor_encoder_demo.c        # Motor and encoder functionality
@@ -12,7 +12,7 @@ if (EXISTS ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c)
             encoder.c                   # ADD THIS - Digital encoder functionality
             ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c
             )
-        target_compile_definitions(picow_freertos_ping PRIVATE
+        target_compile_definitions(project PRIVATE
                 WIFI_SSID=\"${WIFI_SSID}\"
                 WIFI_PASSWORD=\"${WIFI_PASSWORD}\"
                 NO_SYS=0                    # Using FreeRTOS with sockets
@@ -20,12 +20,12 @@ if (EXISTS ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c)
                 PING_USE_SOCKETS=1          # Use sockets for ping
                 PICO_MAX_SHARED_IRQ_HANDLERS=8  # ADD THIS
                 )
-    target_include_directories(picow_freertos_ping PRIVATE
+    target_include_directories(project PRIVATE
             ${CMAKE_CURRENT_LIST_DIR}
             ${CMAKE_CURRENT_LIST_DIR}/../.. # for our common lwipopts
             ${PICO_LWIP_CONTRIB_PATH}/apps/ping
             )
-    target_link_libraries(picow_freertos_ping
+    target_link_libraries(project
             pico_cyw43_arch_lwip_sys_freertos  # Use FreeRTOS version
             pico_stdlib
             pico_lwip_nosys
@@ -37,7 +37,7 @@ if (EXISTS ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c)
             pico_time                   # for timing functions
             m                           # Math library for IMU calculations
             )
-    pico_enable_stdio_usb(picow_freertos_ping 1)
-    pico_add_extra_outputs(picow_freertos_ping)
+    pico_enable_stdio_usb(project 1)
+    pico_add_extra_outputs(project)
     
 endif()
