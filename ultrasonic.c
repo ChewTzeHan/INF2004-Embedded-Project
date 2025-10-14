@@ -101,3 +101,13 @@ float ultrasonic_get_distance_cm(void) {
 
     return distance_cm;
 }
+
+// Add this function to ultrasonic.c
+void ultrasonic_trigger_measurement(void) {
+    // Send trigger pulse
+    gpio_put(TRIG_PIN, 0);
+    sleep_us(2);
+    gpio_put(TRIG_PIN, 1);
+    sleep_us(10);
+    gpio_put(TRIG_PIN, 0);
+}

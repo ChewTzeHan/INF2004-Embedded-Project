@@ -8,12 +8,13 @@
  * Description: Main application entry point
  */
 #define PICO_MAX_SHARED_IRQ_HANDLERS 8
-#include "imu_raw_demo.h"  // IMU sensor header
-#include "ir_sensor.h"     // ADD THIS - IR sensor header
-#include "encoder.h"       // ADD THIS - Encoder header
+#include "imu_raw_demo.h"
+#include "ir_sensor.h"
+#include "encoder.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 // Pico-specific includes for WiFi and hardware
 #include "pico/cyw43_arch.h"
@@ -23,274 +24,418 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "message_buffer.h"
+#include "queue.h"
+#include "timers.h"
 
 // Header file for server functions
 #include "picow_freertos_ping.h"
 #include "motor_encoder_demo.h"
-#include "ultrasonic.h"  // Ultrasonic sensor header
+#include "ultrasonic.h"
 
 // Hardware peripheral includes
 #include "hardware/gpio.h"
 #include "hardware/adc.h"
 #include "hardware/pwm.h"
+#include "hardware/timer.h"
+
+#include <time.h>
 
 // ==============================
-// GLOBAL VARIABLES
+// GLOBAL VARIABLES - Sensor Data Storage
 // ==============================
 
-ir_calib_t ir_calibration;  // ADD THIS - IR sensor calibration data
+// IR Sensor Data
+typedef struct {
+    uint16_t left_raw;
+    bool right_digital;
+    uint64_t last_change_time;
+    bool last_digital_state;
+} ir_data_t;
+
+// Ultrasonic Data
+typedef struct {
+    float distance_cm;
+    bool object_present;
+} ultrasonic_data_t;
+
+// IMU Data
+typedef struct {
+    float pitch;
+    float roll;  
+    float yaw;
+} imu_data_t;
+
+// Motor Data
+typedef struct {
+    int32_t encoder1_pulses;
+    int32_t encoder2_pulses;
+    uint32_t last_encoder_time;
+} motor_data_t;
+
+// Global sensor data structures
+ir_data_t ir_sensor_data = {0};
+ultrasonic_data_t ultrasonic_data = {0};
+imu_data_t imu_data = {0};
+motor_data_t motor_data = {0};
+
+// Encoder state tracking
+static bool last_enc1_state = false;
+static bool last_enc2_state = false;
+
+// Pico SDK repeating timers
+struct repeating_timer imu_timer;
+struct repeating_timer encoder_timer;
+struct repeating_timer sensor_timer;
+struct repeating_timer telemetry_timer;
 
 // ==============================
-// TASK DEFINITIONS
+// FUNCTION DECLARATIONS
 // ==============================
 
-/**
- * @brief Motor control task
- * 
- * Handles motor commands from serial input and displays encoder readings
- * 
- * @param params Task parameters (not used)
- */
-void motor_task(__unused void *params) {
-    motor_encoder_init();
-    print_motor_help();
+// Forward declarations
+float calculate_pid_output(uint16_t ir_raw, float yaw);
+void set_motor_speed(float speed);
+void avoid_obstacle(void);
+void decode_barcode(void);
+
+// Timer callback functions
+bool read_imu_data_callback(struct repeating_timer *t);
+bool update_encoders_callback(struct repeating_timer *t);
+bool sensor_update_callback(struct repeating_timer *t);
+bool telemetry_callback(struct repeating_timer *t);
+
+// ==============================
+// PICO SDK TIMER CALLBACKS
+// ==============================
+
+bool read_imu_data_callback(struct repeating_timer *t) {
+    // IMU reading (20ms)
+    int16_t ax, ay, az;
+    if (read_accel_raw(&ax, &ay, &az)) {
+        imu_data.pitch = atan2f(-ax, sqrtf(ay*ay + az*az)) * 180.0f / (float)M_PI;
+        imu_data.roll = atan2f(ay, az) * 180.0f / (float)M_PI;
+        
+        int16_t mx, my;
+        if (read_mag_raw(&mx, &my)) {
+            imu_data.yaw = atan2f(my, mx) * 180.0f / (float)M_PI;
+            if (imu_data.yaw < 0) imu_data.yaw += 360.0f;
+        }
+    }
+    return true; // Continue repeating
+}
+
+bool update_encoders_callback(struct repeating_timer *t) {
+    // Encoder reading (10ms)
+    bool current_enc1 = gpio_get(6);
+    bool current_enc2 = gpio_get(4);
     
-    char line[64]; 
+    if (current_enc1 && !last_enc1_state) {
+        motor_data.encoder1_pulses++;
+    }
+    if (current_enc2 && !last_enc2_state) {
+        motor_data.encoder2_pulses++;
+    }
+    
+    last_enc1_state = current_enc1;
+    last_enc2_state = current_enc2;
+    motor_data.last_encoder_time = time_us_32();
+    return true; // Continue repeating
+}
+
+bool sensor_update_callback(struct repeating_timer *t) {
+    // Combined sensor updates (50ms)
+    printf("Sensor update callback triggered\n");
+    // 1. Read IR sensors
+    ir_sensor_data.left_raw = ir_read_raw();
+    
+    bool current_right_state = gpio_get(RIGHT_IR_DIGITAL_PIN);
+    if (current_right_state != ir_sensor_data.last_digital_state) {
+        ir_sensor_data.right_digital = current_right_state;
+        ir_sensor_data.last_change_time = time_us_64();
+        ir_sensor_data.last_digital_state = current_right_state;
+        
+        if (current_right_state) {
+            printf("Right IR BLACK - barcode detected\n");
+            decode_barcode();
+        }
+    }
+    
+    // 2. Read ultrasonic
+    float distance = ultrasonic_get_distance_cm();
+    ultrasonic_data.distance_cm = distance;
+    ultrasonic_data.object_present = (distance > 2.0f && distance < 30.0f);
+    
+    if (ultrasonic_data.object_present) {
+        printf("OBSTACLE at %.1fcm! Avoiding...\n", distance);
+        avoid_obstacle();
+    }
+    
+    // 3. Run PID control
+    float motor_speed = calculate_pid_output(ir_sensor_data.left_raw, imu_data.yaw);
+    set_motor_speed(motor_speed);
+    
+    return true; // Continue repeating
+}
+
+bool telemetry_callback(struct repeating_timer *t) {
+    // Telemetry (500ms)
+    printf("=== SENSOR DATA ===\n");
+    printf("IR: L=%u R=%d (%.1fs)\n",
+           ir_sensor_data.left_raw, ir_sensor_data.right_digital,
+           (double)(time_us_64() - ir_sensor_data.last_change_time) / 1000000.0);
+    printf("US: %.1fcm %s\n",
+           ultrasonic_data.distance_cm, ultrasonic_data.object_present ? "OBSTACLE" : "CLEAR");
+    printf("IMU: P=%.1f R=%.1f Y=%.1f\n",
+           imu_data.pitch, imu_data.roll, imu_data.yaw);
+    printf("ENC: E1=%ld E2=%ld\n", 
+           (long)motor_data.encoder1_pulses, (long)motor_data.encoder2_pulses);
+    printf("==================\n");
+    return true; // Continue repeating
+}
+
+// ==============================
+// TASK FUNCTIONS
+// ==============================
+
+void motor_control_task(__unused void *params) {
+    printf("Motor control task started\n");
+    
+    char line[64];
     int idx = 0;
     
-    while (true) {
+    while(true) {
+        // Check for serial commands
         int ch = getchar_timeout_us(0);
-        
         if (ch >= 0) {
             if (ch == '\r' || ch == '\n') {
-                line[idx] = 0; 
+                line[idx] = 0;
                 idx = 0;
                 if (line[0]) {
+                    printf("Processing command: %s\n", line);
                     process_motor_command(line);
                 }
             } else if (idx < (int)sizeof(line)-1) {
                 line[idx++] = (char)ch;
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(5));
+        
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
-/**
- * @brief Motor encoder polling task
- * 
- * Periodically polls encoder states (replaces interrupts)
- * 
- * @param params Task parameters (not used)
- */
-void motor_encoder_poll_task(__unused void *params) {
-    while(true) {
-        motor_encoder_poll();  // Poll both encoders
-        vTaskDelay(pdMS_TO_TICKS(1));  // Poll at ~1kHz (adjust as needed)
-    }
-}
-
-/**
- * @brief Sensor data aggregation and display task
- * 
- * Collects data from all sensors and prints in a unified format
- * 
- * @param params Task parameters (not used)
- */
-void sensor_display_task(__unused void *params) {
-    // Initialize sensors
-    ultrasonic_init();
-    ir_init(&ir_calibration);
-    
-    // Quick IR calibration
-    for (int i = 0; i < 20; i++) {
-        uint16_t v = ir_read_raw();
-        ir_update_calibration(&ir_calibration, v);
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    
-    printf("=== Sensor System Initialized ===\n");
-    printf("Ultrasonic: TRIG GP%d, ECHO GP%d\n", TRIG_PIN, ECHO_PIN);
-    printf("IR Sensor: GPIO%d (ADC%d)\n", IR_GPIO, IR_ADC_INPUT);
-    printf("Motor Encoders: ENC1 GP6, ENC2 GP4\n");
-    printf("IMU: I2C0 (SDA GP16, SCL GP17)\n\n");
-    
-    // Print header
-    printf("TIME | ULTRASONIC | IR_SENSOR | MOTOR_ENC | IMU_DATA\n");
-    printf("-----|------------|-----------|-----------|-----------------------------\n");
-    
-    uint32_t iteration = 0;
-    static int ir_prev_state = 0;
+void system_status_task(__unused void *params) {
+    printf("System status task started\n");
     
     while(true) {
-        iteration++;
+        // Simple heartbeat
+        static int heartbeat = 0;
+        heartbeat++;
         
-        // Collect sensor data
-        float distance = ultrasonic_get_distance_cm();
-        uint16_t ir_raw = ir_read_raw();
-        printf("IR RAW %4u |\n", ir_raw); // DEBUG: Print raw IR value
-        ir_update_calibration(&ir_calibration, ir_raw);
-        int ir_state = ir_classify_hysteresis(ir_raw, &ir_calibration, ir_prev_state);
-        ir_prev_state = ir_state;
-        const char* surface_type = (ir_state == 1) ? "BLACK" : "WHITE";
-        
-        // Print unified sensor data
-        printf("%4lu |", (unsigned long)iteration);
-        
-        // Ultrasonic data
-        printf("RAW DIST %5.1f |\n", distance); // DEBUG: Print raw distance value
-        if (distance > 0 && distance <= 100.0f) {
-            printf(" %5.1f cm   |", distance);
-        } else {
-            printf(" NO_OBST   |");  // FIXED: Added parentheses
+        // Check if sensors are updating
+        uint32_t current_time = time_us_32();
+        if (current_time - motor_data.last_encoder_time > 1000000) {
+            printf("[STATUS] Encoders not updating\n");
         }
         
-        // IR sensor data
-        printf(" %3s(%4u)|", surface_type, ir_raw);  // FIXED: Added parentheses
-        
-        // Motor encoder data
-        printf(" %2lu/%2lu   |",  // FIXED: Added parentheses
-               (unsigned long)E1.edges, (unsigned long)E2.edges);
-        
-        // IMU data (if available)
-        compute_and_print_imu_data();  // This will print on the same line
-        
-        printf("\n");  // Add newline after complete sensor reading
-        
-        vTaskDelay(pdMS_TO_TICKS(500)); // Update every 500ms
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 
-/**
- * @brief LED blinking task
- * 
- * Blinks the onboard LED to indicate the system is running.
- * 
- * @param params Task parameters (not used)
- */
-void led_task(__unused void *params) {
-    while(true) {
-        vTaskDelay(1000);
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-        vTaskDelay(1000);
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+// ==============================
+// CONTROL FUNCTIONS
+// ==============================
+
+float calculate_pid_output(uint16_t ir_raw, float yaw) {
+    float base_speed = 40.0f;
+    float correction = (ir_raw - 2000) * 0.01f;
+    
+    if (correction > 25.0f) correction = 25.0f;
+    if (correction < -25.0f) correction = -25.0f;
+    
+    return base_speed + correction;
+}
+
+void set_motor_speed(float speed) {
+    float left_speed = speed;
+    float right_speed = speed;
+    
+    float correction_factor = (ir_sensor_data.left_raw - 2000) * 0.02f;
+    left_speed -= correction_factor;
+    right_speed += correction_factor;
+    
+    // Limit speeds
+    if (left_speed > 80.0f) left_speed = 80.0f;
+    if (left_speed < -80.0f) left_speed = -80.0f;
+    if (right_speed > 80.0f) right_speed = 80.0f;
+    if (right_speed < -80.0f) right_speed = -80.0f;
+    
+    drive_signed(left_speed, right_speed);
+}
+
+void avoid_obstacle(void) {
+    printf("Avoiding obstacle...\n");
+    all_stop();
+    vTaskDelay(pdMS_TO_TICKS(200));
+    
+    drive_signed(-30.0f, -30.0f);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    
+    drive_signed(40.0f, -40.0f);
+    vTaskDelay(pdMS_TO_TICKS(800));
+    
+    drive_signed(40.0f, 40.0f);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    
+    all_stop();
+    printf("Avoidance complete\n");
+}
+
+void decode_barcode(void) {
+    static uint32_t last_barcode_time = 0;
+    uint32_t current_time = time_us_32();
+    
+    if (current_time - last_barcode_time > 500000) {
+        printf("Barcode decoding started\n");
+        // Add barcode logic here
+        printf("Barcode decoded\n");
+        last_barcode_time = current_time;
     }
 }
 
-/**
- * @brief Modified main task function with WiFi disabled
- * 
- * This task initializes the system but skips WiFi connection for testing
- * 
- * @param params Task parameters (not used)
- */
+// ==============================
+// INITIALIZATION FUNCTIONS
+// ==============================
+
+void initialize_pico_timers(void) {
+    // Create Pico SDK repeating timers
+    add_repeating_timer_ms(-20, read_imu_data_callback, NULL, &imu_timer);      // 20ms period
+    add_repeating_timer_ms(-10, update_encoders_callback, NULL, &encoder_timer); // 10ms period
+    add_repeating_timer_ms(-50, sensor_update_callback, NULL, &sensor_timer);   // 50ms period
+    add_repeating_timer_ms(-500, telemetry_callback, NULL, &telemetry_timer);   // 500ms period
+    
+    printf("Pico SDK timers initialized and started\n");
+}
+
+void initialize_sensors(void) {
+    // Initialize all sensors
+    ultrasonic_init();
+    ir_init(NULL);
+    motor_encoder_init();
+    
+    // Initialize right IR digital pin
+    gpio_init(RIGHT_IR_DIGITAL_PIN);
+    gpio_set_dir(RIGHT_IR_DIGITAL_PIN, GPIO_IN);
+    gpio_pull_up(RIGHT_IR_DIGITAL_PIN);
+    
+    // Initialize encoder state tracking
+    last_enc1_state = gpio_get(6);
+    last_enc2_state = gpio_get(4);
+    
+    // Initialize sensor data
+    ir_sensor_data.last_digital_state = gpio_get(RIGHT_IR_DIGITAL_PIN);
+    ir_sensor_data.right_digital = ir_sensor_data.last_digital_state;
+    ir_sensor_data.last_change_time = time_us_64();
+    motor_data.last_encoder_time = time_us_32();
+    
+    printf("All sensors initialized\n");
+}
+
+// ==============================
+// MAIN TASK
+// ==============================
+
 void main_task(__unused void *params) {
-    // Initialize the Pico W's WiFi hardware
+    printf("Main task started - initializing system...\n");
+    
     if (cyw43_arch_init()) {
         printf("Failed to initialize WiFi hardware\n");
+        vTaskDelete(NULL);
         return;
     }
     
-    printf("WiFi hardware initialized (connection disabled for testing)\n");
-    printf("All sensor systems are active:\n");
-    printf("- Motor control with encoders\n");
-    printf("- Ultrasonic distance sensor\n");
-    printf("- IMU (Accelerometer + Magnetometer)\n");
-    printf("- IR line following sensor\n");
-    printf("- Digital encoder input\n");
+    printf("=== Pico SDK Timer-Based Robot Control ===\n");
+    
+    // Initialize everything
+    initialize_sensors();
+    initialize_pico_timers();
+    
+    printf("\n=== SYSTEM READY ===\n");
+    printf("Pico SDK timers active:\n");
+    printf("  Encoders: 10ms (100Hz)\n");
+    printf("  IMU: 20ms (50Hz)\n");
+    printf("  Sensors: 50ms (20Hz) - IR, Ultrasonic, PID\n");
+    printf("  Telemetry: 500ms (2Hz)\n");
+    printf("Type 'help' for motor commands\n\n");
 
-    // Main system loop - keep the system running
+    // Main task just waits - timers handle everything
     while(true) {
-        vTaskDelay(1000);
+        // Flash LED to show system is alive
+        static uint32_t last_led_toggle = 0;
+        if (time_us_32() - last_led_toggle > 500000) { // 500ms
+            static bool led_state = false;
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_state);
+            led_state = !led_state;
+            last_led_toggle = time_us_32();
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+void vLaunch(void) {
+    printf("Creating FreeRTOS tasks...\n");
+    
+    // Create main system task (highest priority)
+    if (xTaskCreate(main_task, "MainThread", configMINIMAL_STACK_SIZE * 2, NULL, 
+                    tskIDLE_PRIORITY + 3, NULL) != pdPASS) {
+        printf("Failed to create main task!\n");
+        return;
+    }
+    
+    // Create motor control task
+    if (xTaskCreate(motor_control_task, "MotorControl", configMINIMAL_STACK_SIZE, NULL, 
+                    tskIDLE_PRIORITY + 2, NULL) != pdPASS) {
+        printf("Failed to create motor control task!\n");
+        return;
+    }
+    
+    // Create system status task (lowest priority)
+    if (xTaskCreate(system_status_task, "SystemStatus", configMINIMAL_STACK_SIZE, NULL, 
+                    tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
+        printf("Failed to create system status task!\n");
+        return;
     }
 
-    // Clean up if we ever exit (unlikely)
-    cyw43_arch_deinit();
-}
-
-/**
- * @brief FreeRTOS launch function
- * 
- * Creates all tasks and starts the FreeRTOS scheduler.
- */
-void vLaunch(void) {
-    TaskHandle_t task;
-    
-    // Create main system task (WiFi disabled)
-    xTaskCreate(main_task, "MainThread", configMINIMAL_STACK_SIZE, NULL, 
-                TEST_TASK_PRIORITY, &task);
-    
-    // Create LED blinking task
-    TaskHandle_t ledtask;
-    xTaskCreate(led_task, "LedThread", configMINIMAL_STACK_SIZE, NULL, 8, &ledtask);
-    
-    // Create sensor display task (replaces individual sensor tasks)
-    TaskHandle_t sensordisplaytask;
-    xTaskCreate(sensor_display_task, "SensorDisplayThread", configMINIMAL_STACK_SIZE * 2, NULL, 7, &sensordisplaytask);
-
-    // Create motor control task
-    TaskHandle_t motortask;
-    xTaskCreate(motor_task, "MotorThread", configMINIMAL_STACK_SIZE, NULL, 6, &motortask);
-
-    // Create motor encoder POLLING task (replaces interrupt approach)
-    TaskHandle_t encoderpolltask;
-    xTaskCreate(motor_encoder_poll_task, "EncoderPollThread", configMINIMAL_STACK_SIZE, NULL, 5, &encoderpolltask);
-
-    // Create IMU sensor task
-    TaskHandle_t imutask;
-    xTaskCreate(imu_task, "ImuThread", configMINIMAL_STACK_SIZE * 2, NULL, 3, &imutask);
-
-    // Create message buffer for inter-task communication
+    // Create message buffer
     xControlMessageBuffer = xMessageBufferCreate(mbaTASK_MESSAGE_BUFFER_SIZE);
 
-// Core affinity configuration for multi-core systems
-#if NO_SYS && configUSE_CORE_AFFINITY && configNUM_CORES > 1
-    vTaskCoreAffinitySet(task, 1);
-#endif
-
-    // Start the FreeRTOS scheduler - this never returns
+    printf("Starting FreeRTOS scheduler...\n");
     vTaskStartScheduler();
+    
+    // Should never reach here
+    printf("ERROR: FreeRTOS scheduler failed to start!\n");
 }
 
-/**
- * @brief Main application entry point
- * 
- * Initializes hardware and starts the FreeRTOS system.
- * 
- * @return int Exit code (should never return due to FreeRTOS scheduler)
- */
 int main(void) {
-    // Initialize standard I/O (USB serial)
     stdio_init_all();
     
-    printf("=== Pico Multi-Sensor Robot Control System ===\n");
-    printf("Testing all integrated systems:\n");
-    printf("- Motor control with encoders\n");
-    printf("- Ultrasonic obstacle detection\n");
-    printf("- IMU orientation and motion\n");
-    printf("- IR line following\n");
-    printf("- Digital encoder input\n");
-    printf("WiFi connection disabled for testing\n");
-    printf("Waiting for serial port...\n");
+    printf("\n\n=== Pico SDK Timer Robot Control System ===\n");
+    printf("Initializing...\n");
     
-    // Wait for serial connection to be established
-    sleep_ms(2000);
-
-    // Determine FreeRTOS variant name for display
-    const char *rtos_name;
-#if (portSUPPORT_SMP == 1)
-    rtos_name = "FreeRTOS SMP";
-#else
-    rtos_name = "FreeRTOS";
-#endif
-
-    printf("Starting %s on core 0:\n", rtos_name);
-    printf("Motor commands available via serial monitor\n");
-    printf("Type 'help' for motor command list\n");
-    printf("All sensor readings will be displayed in unified format\n\n");
+    // Longer delay to ensure serial is ready
+    for(int i = 0; i < 10; i++) {
+        printf(".");
+        sleep_ms(200);
+    }
+    printf("\n");
     
-    // Launch the FreeRTOS system (this function never returns)
     vLaunch();
+    
+    // If we get here, something went wrong
+    while(1) {
+        printf("System failed to start - halting\n");
+        sleep_ms(1000);
+    }
     
     return 0;
 }

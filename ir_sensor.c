@@ -2,6 +2,7 @@
 #include "ir_sensor.h"
 #include "hardware/adc.h"
 #include <stdbool.h>
+#include <sys/time.h>
 
 void ir_init(ir_calib_t *cal) {
     adc_init();
@@ -41,7 +42,7 @@ int ir_classify(uint16_t sample, const ir_calib_t *cal) {
 int ir_classify_hysteresis(uint16_t sample, const ir_calib_t *cal, int prev_state) {
     uint16_t th = ir_threshold(cal);
     uint16_t low = (th > IR_HYST_MARGIN) ? (th - IR_HYST_MARGIN) : 0;
-    uint16_t high = (th + IR_HYST_MARGIN <= 4095) ? (th + IR_HYST_MARGIN) : 4095;
+    uint16_t high = (th + IR_HYST_MARGIN <= 400) ? (th + IR_HYST_MARGIN) : 400;
 
 #if IR_BLACK_IS_LOWER
     // BLACK when below 'low', WHITE when above 'high', otherwise keep previous state
@@ -54,4 +55,10 @@ int ir_classify_hysteresis(uint16_t sample, const ir_calib_t *cal, int prev_stat
     if (sample <= low) return 0;          // definitely white
     return prev_state;
 #endif
+}
+
+int classify_colour(uint16_t raw){
+    if (raw > 1000) return 1; // Black
+    else if (raw > 400 && raw < 1000) return 2; // Grey
+    else return 0; // White
 }

@@ -8,7 +8,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+// Add these definitions to ir_sensor.h
+#ifndef RIGHT_IR_DIGITAL_PIN
+#define RIGHT_IR_DIGITAL_PIN 22  // GPIO pin for right IR digital output
+#endif
 // === Pin selection ===
 // GPIO26->ADC0, GPIO27->ADC1, GPIO28->ADC2
 #ifndef IR_ADC_INPUT

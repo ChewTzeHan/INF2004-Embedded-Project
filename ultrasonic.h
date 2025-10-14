@@ -27,4 +27,8 @@ void ultrasonic_init(void);
 // Sends trigger pulse and measures the distance in centimeters
 float ultrasonic_get_distance_cm(void);
 
+
+// Add this function prototype to ultrasonic.h
+void ultrasonic_trigger_measurement(void);
+
 #endif
