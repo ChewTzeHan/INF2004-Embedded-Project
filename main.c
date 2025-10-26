@@ -115,9 +115,13 @@ bool read_imu_data_callback(struct repeating_timer *t) {
         imu_data.pitch = atan2f(-ax, sqrtf(ay*ay + az*az)) * 180.0f / (float)M_PI;
         imu_data.roll = atan2f(ay, az) * 180.0f / (float)M_PI;
         
-        int16_t mx, my;
-        if (read_mag_raw(&mx, &my)) {
-            imu_data.yaw = atan2f(my, mx) * 180.0f / (float)M_PI;
+        int16_t mx, my, mz;
+        if (read_mag_raw(&mx, &my, &mz)) {
+            // Use the new calculate_yaw function with tilt compensation
+            // Note: You'll need to implement or call the calculate_yaw function from imu_raw_demo
+            // For now, use a simple calculation or include the function
+            float yaw_rad = atan2f(my, mx);
+            imu_data.yaw = yaw_rad * 180.0f / (float)M_PI;
             if (imu_data.yaw < 0) imu_data.yaw += 360.0f;
         }
     }
@@ -144,7 +148,6 @@ bool update_encoders_callback(struct repeating_timer *t) {
 
 bool sensor_update_callback(struct repeating_timer *t) {
     // Combined sensor updates (50ms)
-    printf("Sensor update callback triggered\n");
     // 1. Read IR sensors
     ir_sensor_data.left_raw = ir_read_raw();
     
@@ -369,6 +372,7 @@ void main_task(__unused void *params) {
 
     // Main task just waits - timers handle everything
     while(true) {
+        printf("FUCKING WORK\n");
         // Flash LED to show system is alive
         static uint32_t last_led_toggle = 0;
         if (time_us_32() - last_led_toggle > 500000) { // 500ms
@@ -416,26 +420,23 @@ void vLaunch(void) {
     printf("ERROR: FreeRTOS scheduler failed to start!\n");
 }
 
-int main(void) {
-    stdio_init_all();
+// int main(void) {
+//     stdio_init_all();
     
-    printf("\n\n=== Pico SDK Timer Robot Control System ===\n");
-    printf("Initializing...\n");
+//     printf("\n\n=== Pico SDK Timer Robot Control System ===\n");
+//     printf("Initializing...\n");
     
-    // Longer delay to ensure serial is ready
-    for(int i = 0; i < 10; i++) {
-        printf(".");
-        sleep_ms(200);
-    }
-    printf("\n");
+//     // Wait for serial to be ready - give more time
+//     sleep_ms(2000);
     
-    vLaunch();
+//     printf("Starting FreeRTOS...\n");
+//     vLaunch();
     
-    // If we get here, something went wrong
-    while(1) {
-        printf("System failed to start - halting\n");
-        sleep_ms(1000);
-    }
+//     // If we get here, something went wrong
+//     while(1) {
+//         printf("System failed to start - halting\n");
+//         sleep_ms(1000);
+//     }
     
-    return 0;
-}
+//     return 0;
+// }
