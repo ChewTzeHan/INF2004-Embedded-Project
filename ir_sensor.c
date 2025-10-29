@@ -1,8 +1,7 @@
-
 #include "ir_sensor.h"
 #include "hardware/adc.h"
 #include <stdbool.h>
-#include <sys/time.h>
+#include "pico/time.h"
 
 void ir_init(ir_calib_t *cal) {
     adc_init();
@@ -12,6 +11,12 @@ void ir_init(ir_calib_t *cal) {
         cal->min_raw = 4095;
         cal->max_raw = 0;
     }
+}
+
+void ir_digital_init(void) {
+    gpio_init(RIGHT_IR_DIGITAL_PIN);
+    gpio_set_dir(RIGHT_IR_DIGITAL_PIN, GPIO_IN);
+    gpio_pull_up(RIGHT_IR_DIGITAL_PIN); // Optional: add pull-up if needed
 }
 
 uint16_t ir_read_raw(void) {
@@ -24,6 +29,10 @@ uint16_t ir_read_raw(void) {
         sleep_us(5);
     }
     return (uint16_t)(acc / N);
+}
+
+bool ir_read_digital(void) {
+    return gpio_get(RIGHT_IR_DIGITAL_PIN);
 }
 
 bool ir_is_black(uint16_t sample, const ir_calib_t *cal) {

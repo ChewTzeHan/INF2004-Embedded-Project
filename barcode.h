@@ -18,6 +18,11 @@ extern "C" {
 #define MAX_TRANSITIONS 256
 #endif
 
+// Digital IR sensor pin
+#ifndef RIGHT_IR_DIGITAL_PIN
+#define RIGHT_IR_DIGITAL_PIN 22
+#endif
+
 typedef enum {
     BARCODE_CMD_UNKNOWN = 0,
     BARCODE_CMD_LEFT,
@@ -34,11 +39,11 @@ typedef struct {
     uint32_t scan_time_us;
 } barcode_result_t;
 
-// Initialize barcode subsystem and seed IR calibration (analog channel)
+// Initialize barcode subsystem with digital IR sensor
 void barcode_init(void);
 
-// Enable IRQ capture on the given RIGHT IR digital pin (rising+falling edges)
-void barcode_irq_init(uint gpio);
+// Enable IRQ capture on the digital IR pin (rising+falling edges)
+void barcode_irq_init(void);
 
 // Non-blocking capture flow:
 // - Call barcode_capture_ready() in a timer/task to see if a frame is ready.
@@ -46,8 +51,8 @@ void barcode_irq_init(uint gpio);
 bool barcode_capture_ready(void);
 bool barcode_decode_captured(barcode_result_t *result);
 
-// Optional: pure analog blocking scan (uses analog sampling + hysteresis)
-bool barcode_scan_analog(barcode_result_t *result);
+// Digital blocking scan (uses digital pin with polling)
+bool barcode_scan_digital(barcode_result_t *result);
 
 // Map decoded string to a motion command
 barcode_command_t barcode_parse_command(const char *barcode_str);

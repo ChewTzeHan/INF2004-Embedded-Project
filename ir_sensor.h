@@ -1,4 +1,3 @@
-
 #ifndef IR_SENSOR_H
 #define IR_SENSOR_H
 
@@ -8,10 +7,12 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 // Add these definitions to ir_sensor.h
 #ifndef RIGHT_IR_DIGITAL_PIN
-#define RIGHT_IR_DIGITAL_PIN 22  // GPIO pin for right IR digital output
+#define RIGHT_IR_DIGITAL_PIN 3  // GPIO pin for right IR digital output
 #endif
+
 // === Pin selection ===
 // GPIO26->ADC0, GPIO27->ADC1, GPIO28->ADC2
 #ifndef IR_ADC_INPUT
@@ -42,8 +43,14 @@ typedef struct {
 // Init ADC + seed calibration
 void ir_init(ir_calib_t *cal);
 
+// Initialize digital IR sensor pin
+void ir_digital_init(void);
+
 // Read one 12-bit sample with small averaging
 uint16_t ir_read_raw(void);
+
+// Read digital IR sensor state
+bool ir_read_digital(void);
 
 // Update observed min/max
 static inline void ir_update_calibration(ir_calib_t *cal, uint16_t v) {

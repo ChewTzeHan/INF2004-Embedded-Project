@@ -22,12 +22,12 @@
 #define MAG_SCALE_Y   (0.97f)
 #define MAG_SCALE_Z   (1.00f)*/
 
-#define MAG_OFFSET_X  (301.0f)
-#define MAG_OFFSET_Y  (-74.0f)
-#define MAG_OFFSET_Z  (-228.0f)
-#define MAG_SCALE_X   (457.0f)
-#define MAG_SCALE_Y   (369.0f)
-#define MAG_SCALE_Z   (475.0f)
+#define MAG_SCALE_X   (105.0f)
+#define MAG_SCALE_Y   (38.5f)
+#define MAG_SCALE_Z   (63.5f)
+#define MAG_OFFSET_X  (-258.0f)
+#define MAG_OFFSET_Y  (-248.5f)
+#define MAG_OFFSET_Z  (-342.5f)
 
 // ========== Filter parameters ==========
 #define ACCEL_ALPHA  0.1f
@@ -183,9 +183,9 @@ float calculate_simple_yaw(int16_t mx, int16_t my) {
     float yaw = atan2f(-my_cal, mx_cal) * 180.0f / M_PI;
     
     // Convert to navigation standard (0° = North, clockwise)
-    yaw = 90.0f - yaw;
+    // yaw = 90.0f - yaw;
     if (yaw < 0) yaw += 360.0f;
-    if (yaw >= 360.0f) yaw -= 360.0f;
+    // if (yaw >= 360.0f) yaw -= 360.0f;
     
     // Add filtering
     yaw_filtered = YAW_ALPHA * yaw + (1 - YAW_ALPHA) * yaw_filtered;
@@ -251,19 +251,21 @@ void simple_calibration() {
         printf("ERROR: No magnetometer readings! Check wiring.\n");
         return;
     }
+    while(1){
+        printf("Min: X:%6d Y:%6d Z:%6d\n", min_x, min_y, min_z);
+        printf("Max: X:%6d Y:%6d Z:%6d\n", max_x, max_y, max_z);
+        
+        printf("\nHard Iron Offsets:\n");
+        printf("#define MAG_OFFSET_X  (%.1ff)\n", (max_x + min_x) / 2.0f);
+        printf("#define MAG_OFFSET_Y  (%.1ff)\n", (max_y + min_y) / 2.0f);
+        printf("#define MAG_OFFSET_Z  (%.1ff)\n", (max_z + min_z) / 2.0f);
+        
+        printf("\nScale Factors:\n");
+        printf("#define MAG_SCALE_X   (%.1ff)\n", (max_x - min_x) / 2.0f);
+        printf("#define MAG_SCALE_Y   (%.1ff)\n", (max_y - min_y) / 2.0f);
+        printf("#define MAG_SCALE_Z   (%.1ff)\n", (max_z - min_z) / 2.0f);
+    }
     
-    printf("Min: X:%6d Y:%6d Z:%6d\n", min_x, min_y, min_z);
-    printf("Max: X:%6d Y:%6d Z:%6d\n", max_x, max_y, max_z);
-    
-    printf("\nHard Iron Offsets:\n");
-    printf("#define MAG_OFFSET_X  (%.1ff)\n", (max_x + min_x) / 2.0f);
-    printf("#define MAG_OFFSET_Y  (%.1ff)\n", (max_y + min_y) / 2.0f);
-    printf("#define MAG_OFFSET_Z  (%.1ff)\n", (max_z + min_z) / 2.0f);
-    
-    printf("\nScale Factors:\n");
-    printf("#define MAG_SCALE_X   (%.1ff)\n", (max_x - min_x) / 2.0f);
-    printf("#define MAG_SCALE_Y   (%.1ff)\n", (max_y - min_y) / 2.0f);
-    printf("#define MAG_SCALE_Z   (%.1ff)\n", (max_z - min_z) / 2.0f);
 }
 
 // Add accelerometer calibration
@@ -309,7 +311,7 @@ void compute_and_print_data(int16_t ax, int16_t ay, int16_t az) {
     calculate_orientation(ax_filtered, ay_filtered, az_filtered, &pitch, &roll);
 
     // ✅ Use the tilt-compensated yaw function
-    float yaw = calculate_yaw(mx, my, mz, pitch, roll);
+    float yaw = calculate_simple_yaw(mx, my);
 
     // Transform accelerometer readings and detect motion
     float ax_f = ax_filtered, ay_f = ay_filtered, az_f = az_filtered;
@@ -347,7 +349,7 @@ void compute_and_print_data(int16_t ax, int16_t ay, int16_t az) {
     
 //     // Wait for user input with timeout
 //     absolute_time_t timeout = make_timeout_time_ms(10000); // 10 second timeout
-//     char choice = 0;
+//     char choice = '3';
     
 //     // while (absolute_time_diff_us(get_absolute_time(), timeout) > 0) {
 //     //     int ch = getchar_timeout_us(100000); // 100ms timeout

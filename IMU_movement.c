@@ -400,70 +400,70 @@ void imu_movement_task(__unused void *params) {
 // STANDALONE TEST MAIN FUNCTION
 // ==============================
 
-int main(void) {
-    stdio_init_all();
+// int main(void) {
+//     stdio_init_all();
     
-    // Wait for serial connection to be established
-    sleep_ms(4000);
+//     // Wait for serial connection to be established
+//     sleep_ms(4000);
     
-    printf("\n\n=== IMU Movement System with YAW PID Control ===\n");
-    printf("Initializing IMU...\n");
+//     printf("\n\n=== IMU Movement System with YAW PID Control ===\n");
+//     printf("Initializing IMU...\n");
     
-    // Initialize the IMU movement system
-    imu_movement_init();
+//     // Initialize the IMU movement system
+//     imu_movement_init();
     
-    // Initialize motors
-    motor_encoder_init();
+//     // Initialize motors
+//     motor_encoder_init();
     
-    // Detect initial setpoint automatically
-    printf("\n=== Auto-Setpoint Detection ===\n");
-    if (!detect_initial_setpoint(10)) { // Take 10 samples for averaging
-        printf("Falling back to manual setpoint: 0.0°\n");
-        pid_config.setpoint = 0.0f; // Fallback value
-    }
+//     // Detect initial setpoint automatically
+//     printf("\n=== Auto-Setpoint Detection ===\n");
+//     if (!detect_initial_setpoint(10)) { // Take 10 samples for averaging
+//         printf("Falling back to manual setpoint: 0.0°\n");
+//         pid_config.setpoint = 0.0f; // Fallback value
+//     }
     
-    // Initialize PID controller with detected setpoint
-    pid_controller_init(NULL, NULL);
+//     // Initialize PID controller with detected setpoint
+//     pid_controller_init(NULL, NULL);
     
-    printf("\nStarting IMU data reading loop with PID control...\n");
-    printf("Format: Yaw: [angle]° | Setpoint: [angle]° | Error: [error]° | PID: [output] | L: [left_speed] | R: [right_speed]\n\n");
+//     printf("\nStarting IMU data reading loop with PID control...\n");
+//     printf("Format: Yaw: [angle]° | Setpoint: [angle]° | Error: [error]° | PID: [output] | L: [left_speed] | R: [right_speed]\n\n");
     
-    imu_data_t imu_data;
-    uint32_t last_print_time = 0;
-    uint32_t last_pid_time = 0;
-    const uint32_t pid_interval_ms = 50; // 20Hz PID control
+//     imu_data_t imu_data;
+//     uint32_t last_print_time = 0;
+//     uint32_t last_pid_time = 0;
+//     const uint32_t pid_interval_ms = 50; // 20Hz PID control
     
-    while (true) {
-        uint32_t current_time = time_us_32() / 1000;
+//     while (true) {
+//         uint32_t current_time = time_us_32() / 1000;
         
-        // Read IMU data
-        if (read_imu_data(&imu_data)) {
-            // Apply PID control at higher frequency (20Hz)
-            if (current_time - last_pid_time >= pid_interval_ms) {
-                drive_to_yaw_setpoint(imu_data.yaw, &pid_config, &pid_state);
-                last_pid_time = current_time;
-            }
+//         // Read IMU data
+//         if (read_imu_data(&imu_data)) {
+//             // Apply PID control at higher frequency (20Hz)
+//             if (current_time - last_pid_time >= pid_interval_ms) {
+//                 drive_to_yaw_setpoint(imu_data.yaw, &pid_config, &pid_state);
+//                 last_pid_time = current_time;
+//             }
             
-            // Print data every 500ms with PID information
-            if (current_time - last_print_time >= 500) {
-                // Get current PID values for display
-                float error = calculate_angle_error(imu_data.yaw, pid_config.setpoint);
-                float pid_output = pid_controller_update(imu_data.yaw, &pid_config, &pid_state);
-                float left_speed = pid_config.base_speed_left + pid_output;
-                float right_speed = pid_config.base_speed_right - pid_output;
+//             // Print data every 500ms with PID information
+//             if (current_time - last_print_time >= 500) {
+//                 // Get current PID values for display
+//                 float error = calculate_angle_error(imu_data.yaw, pid_config.setpoint);
+//                 float pid_output = pid_controller_update(imu_data.yaw, &pid_config, &pid_state);
+//                 float left_speed = pid_config.base_speed_left + pid_output;
+//                 float right_speed = pid_config.base_speed_right - pid_output;
 
-                printf("Yaw: %6.1f° | Setpoint: %6.1f° | Error: %6.1f° | PID: %6.1f | L: %6.1f | R: %6.1f\n",
-                       imu_data.yaw, pid_config.setpoint, error, pid_output, left_speed, right_speed);
-                last_print_time = current_time;
-            }
-        } else {
-            printf("[ERROR] Failed to read IMU data - Stopping motors\n");
-            drive_signed(0.0f, 0.0f); // Stop motors on sensor failure
-        }
+//                 printf("Yaw: %6.1f° | Setpoint: %6.1f° | Error: %6.1f° | PID: %6.1f | L: %6.1f | R: %6.1f\n",
+//                        imu_data.yaw, pid_config.setpoint, error, pid_output, left_speed, right_speed);
+//                 last_print_time = current_time;
+//             }
+//         } else {
+//             printf("[ERROR] Failed to read IMU data - Stopping motors\n");
+//             drive_signed(0.0f, 0.0f); // Stop motors on sensor failure
+//         }
         
-        // Small delay to prevent overwhelming the system
-        sleep_ms(10); // 100Hz loop for responsive control
-    }
+//         // Small delay to prevent overwhelming the system
+//         sleep_ms(10); // 100Hz loop for responsive control
+//     }
     
-    return 0;
-}
+//     return 0;
+// }

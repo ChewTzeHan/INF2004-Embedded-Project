@@ -123,7 +123,7 @@ void set_motor_speeds_pid(uint16_t ir_value) {
         last_print = current_time;
     }
     // Set motor speeds
-    //drive_signed(left_speed, right_speed);
+        drive_signed(left_speed, right_speed);
     //drive_signed(BASE_SPEED_LEFT, BASE_SPEED_RIGHT);
 }
 
