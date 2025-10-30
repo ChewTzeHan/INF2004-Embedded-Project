@@ -215,31 +215,66 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
 /* =============================
  * MQTT connection callback
  * ============================= */
+// static void mqtt_conn_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
+//     printf("[MQTT] conn cb status=%d\n", status);
+//     // This callback runs in the lwIP TCPIP thread (already inside the lock)
+//     if (status == MQTT_CONNECT_ACCEPTED) {
+//          printf("[MQTT] CONNECTED (keepalive=%d, clientId=%s)\n", MQTT_KEEPALIVE_S, MQTT_CLIENT_ID);
+//         // g_mqtt_connected = true;
+//         // printf("[MQTT] CONNECTED (status=%d)\n", status);
+
+//         // Subscribe to {BASE_TOPIC}/cmd (QoS 1)
+//         // char topic[128];
+//         // snprintf(topic, sizeof(topic), "%s/cmd", BASE_TOPIC);
+//         // err_t e = mqtt_sub_unsub(client, topic, 1 /*qos*/, NULL, NULL, 1 /*subscribe*/);
+//         // if (e == ERR_OK) {
+//         //     printf("[MQTT] SUBSCRIBED %s\n", topic);
+//         // } else {
+//         //     printf("[MQTT] subscribe err=%d\n", e);
+//         // }
+//         const char *diag = "{\"hello\":\"pico-online\"}";
+//     char dtopic[128]; snprintf(dtopic, sizeof(dtopic), "%s/diag", BASE_TOPIC);
+//     cyw43_arch_lwip_begin();
+//     err_t de = mqtt_publish(client, dtopic, diag, strlen(diag), 0, 1, NULL, NULL);
+//     cyw43_arch_lwip_end();
+//     printf("[MQTT] diag publish -> %s (retained) err=%d\n", dtopic, (int)de);
+
+//         // Register incoming handlers
+//         mqtt_set_inpub_callback(client, mqtt_incoming_publish_cb, mqtt_incoming_data_cb, NULL);
+
+//     } else {
+//         g_mqtt_connected = false;
+//         printf("[MQTT] DISCONNECTED (status=%d)\n", status);
+//     }
+// }
+
 static void mqtt_conn_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
     printf("[MQTT] conn cb status=%d\n", status);
-    // This callback runs in the lwIP TCPIP thread (already inside the lock)
     if (status == MQTT_CONNECT_ACCEPTED) {
         g_mqtt_connected = true;
-        printf("[MQTT] CONNECTED (status=%d)\n", status);
+        printf("[MQTT] CONNECTED (keepalive=%d, clientId=%s)\n", MQTT_KEEPALIVE_S, MQTT_CLIENT_ID);
 
         // Subscribe to {BASE_TOPIC}/cmd (QoS 1)
         char topic[128];
         snprintf(topic, sizeof(topic), "%s/cmd", BASE_TOPIC);
-        err_t e = mqtt_sub_unsub(client, topic, 1 /*qos*/, NULL, NULL, 1 /*subscribe*/);
-        if (e == ERR_OK) {
-            printf("[MQTT] SUBSCRIBED %s\n", topic);
-        } else {
-            printf("[MQTT] subscribe err=%d\n", e);
-        }
+        err_t e = mqtt_sub_unsub(client, topic, 1, NULL, NULL, 1);
+        printf("[MQTT] subscribe %s => err=%d\n", topic, (int)e);
 
-        // Register incoming handlers
+        // Optional: retained diag so web can see the device is online
+        const char *diag = "{\"hello\":\"pico-online\"}";
+        char dtopic[128]; snprintf(dtopic, sizeof(dtopic), "%s/diag", BASE_TOPIC);
+        cyw43_arch_lwip_begin();
+        err_t de = mqtt_publish(client, dtopic, diag, (u16_t)strlen(diag), 0, 1, NULL, NULL);
+        cyw43_arch_lwip_end();
+        printf("[MQTT] diag publish -> %s (retained) err=%d\n", dtopic, (int)de);
+
         mqtt_set_inpub_callback(client, mqtt_incoming_publish_cb, mqtt_incoming_data_cb, NULL);
-
     } else {
         g_mqtt_connected = false;
         printf("[MQTT] DISCONNECTED (status=%d)\n", status);
     }
 }
+
 
 /* =============================
  * Public: connect Wi-Fi + MQTT
@@ -251,6 +286,9 @@ bool wifi_and_mqtt_start(void) {
         return false;
     }
     cyw43_arch_enable_sta_mode();
+
+    printf("[CFG] BROKER_IP macro: %s\n", BROKER_IP);
+
 
     printf("[NET] Connecting Wi-Fi SSID=\"%s\"…\n", WIFI_SSID);
     int r = cyw43_arch_wifi_connect_timeout_ms(
@@ -304,50 +342,96 @@ bool wifi_and_mqtt_start(void) {
  * Public: publish telemetry JSON
  * Safe for FreeRTOS tasks.
  * ============================= */
+// void mqtt_publish_telemetry(float speed, float distance_cm, float yaw_deg,
+//                             float ultra_cm, const char *state) {
+//     if (!g_client || !g_mqtt_connected) { printf("[MQTT] skip publish (not connected)\n"); return; }
+
+//     char topic[128];
+//     char payload[256];
+
+//     char topic[128]; snprintf(topic, sizeof(topic), "%s/telemetry", BASE_TOPIC);
+// printf("[MQTT] -> %s : %s\n", topic, payload);
+// cyw43_arch_lwip_begin();
+// err_t e = mqtt_publish(g_client, topic, payload, (u16_t)strlen(payload), 1, 0, NULL, NULL);
+// cyw43_arch_lwip_end();
+// if (e != ERR_OK) printf("[MQTT] publish err=%d\n", (int)e);
+
+//     // Build JSON to match your web dashboard
+//     snprintf(payload, sizeof(payload),
+//              "{\"speed\":%.2f,\"distance\":%.2f,\"imu\":{\"yaw\":%.2f},"
+//              "\"ultra_cm\":%.2f,\"state\":\"%s\"}",
+//              speed, distance_cm, yaw_deg, ultra_cm, state ? state : "idle");
+
+//     snprintf(topic, sizeof(topic), "%s/telemetry", BASE_TOPIC);
+//         // Print debug info
+//     printf("[MQTT DEBUG] Topic: %s\n", topic);
+//     printf("[MQTT DEBUG] Payload: %s\n", payload);
+
+//     // // Publish telemetry
+//     // snprintf(topic, sizeof(topic), "%s/telemetry", BASE_TOPIC);
+//     // err_t err = mqtt_publish(g_client, topic, payload, strlen(payload),
+//     //                         1 /* QoS1 */, 0 /* retain */, NULL, NULL);
+//     // if (err != ERR_OK) {
+//     //     printf("[MQTT] publish err=%d\n", err);
+//     // } else {
+//     //     printf("[MQTT] publish OK\n");
+//     // }
+
+//    // snprintf(topic, sizeof(topic), "%s/telemetry", BASE_TOPIC);
+
+//     // Publish with QoS 1, non-retained — under lwIP lock
+//     cyw43_arch_lwip_begin();
+//     // err_t e = mqtt_publish(g_client,
+//     //                        topic,
+//     //                        payload,
+//     //                        (u16_t)strlen(payload),
+//     //                        1 /* QoS1 */,
+//     //                        0 /* retain */,
+//     //                        NULL, NULL);
+//     err_t e = mqtt_publish(g_client, topic, payload, (u16_t)strlen(payload),
+//                            1, 0, NULL, NULL);
+//     cyw43_arch_lwip_end();
+
+//     if (e != ERR_OK) {
+//         printf("[MQTT] publish err=%d\n", e);
+//     }
+// }
+
 void mqtt_publish_telemetry(float speed, float distance_cm, float yaw_deg,
                             float ultra_cm, const char *state) {
-    // if (!g_client || !g_mqtt_connected) return;
+    if (!g_client || !g_mqtt_connected) { 
+        printf("[MQTT] skip publish (not connected)\n"); 
+        return; 
+    }
 
     char topic[128];
     char payload[256];
 
-    // Build JSON to match your web dashboard
+    // Build JSON first
     snprintf(payload, sizeof(payload),
              "{\"speed\":%.2f,\"distance\":%.2f,\"imu\":{\"yaw\":%.2f},"
              "\"ultra_cm\":%.2f,\"state\":\"%s\"}",
              speed, distance_cm, yaw_deg, ultra_cm, state ? state : "idle");
 
-        // Print debug info
-    printf("[MQTT DEBUG] Topic: %s\n", topic);
-    printf("[MQTT DEBUG] Payload: %s\n", payload);
-
-    // // Publish telemetry
-    // snprintf(topic, sizeof(topic), "%s/telemetry", BASE_TOPIC);
-    // err_t err = mqtt_publish(g_client, topic, payload, strlen(payload),
-    //                         1 /* QoS1 */, 0 /* retain */, NULL, NULL);
-    // if (err != ERR_OK) {
-    //     printf("[MQTT] publish err=%d\n", err);
-    // } else {
-    //     printf("[MQTT] publish OK\n");
-    // }
-
     snprintf(topic, sizeof(topic), "%s/telemetry", BASE_TOPIC);
 
-    // Publish with QoS 1, non-retained — under lwIP lock
+    // Loud debug
+    printf("[MQTT] -> topic=\"%s\" bytes=%u\n", topic, (unsigned)strlen(payload));
+    printf("[MQTT] payload: %s\n", payload);
+
+    // Single publish under lwIP lock
     cyw43_arch_lwip_begin();
-    err_t e = mqtt_publish(g_client,
-                           topic,
-                           payload,
-                           (u16_t)strlen(payload),
-                           1 /* QoS1 */,
-                           0 /* retain */,
-                           NULL, NULL);
+    err_t e = mqtt_publish(g_client, topic, payload, (u16_t)strlen(payload),
+                           1 /*QoS1*/, 0 /*retain*/, NULL, NULL);
     cyw43_arch_lwip_end();
 
     if (e != ERR_OK) {
-        printf("[MQTT] publish err=%d\n", e);
+        printf("[MQTT] publish err=%d\n", (int)e);
+    } else {
+        printf("[MQTT] publish OK\n");
     }
 }
+
 
 /* =============================
  * Optional: non-RTOS polling

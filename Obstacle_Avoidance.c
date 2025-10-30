@@ -526,7 +526,7 @@ void line_follow_with_obstacle_avoidance(void) {
     }
     
     printf("[NET] Local IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
-    
+
     // Initialize systems
     ultrasonic_init();
     motor_encoder_init();
@@ -536,9 +536,26 @@ void line_follow_with_obstacle_avoidance(void) {
     
     printf("Starting combined operation...\n");
 
-    uint32_t last_pub = to_ms_since_boot(get_absolute_time());
+    // --- wheel/encoder constants (adjust to your robot) ---
+#define WHEEL_DIAMETER_CM      6.5f
+#define PULSES_PER_REV         20u   // encoder counts per wheel revolution
+#define WHEEL_CIRCUM_CM        (3.14159f * WHEEL_DIAMETER_CM)
+#define CM_PER_PULSE           (WHEEL_CIRCUM_CM / (float)PULSES_PER_REV)
+
+uint32_t last_pub_ms  = to_ms_since_boot(get_absolute_time());
+uint32_t last_samp_ms = last_pub_ms;
+uint32_t last_pulses  = get_encoder_pulses();
+
+// Telemetry state
+float     dist = 0.0f;   // total distance travelled (cm)
+float     yaw  = 0.0f;   // TODO: replace with IMU yaw when available
     
     while (system_active) {
+        // --- your behaviour code (line follow / obstacle check) ---
+        float ultra = ultrasonic_get_distance_cm();
+        bool avoiding_obstacle = obstacle_detected(ultra);
+        const char *state = avoiding_obstacle ? "obstacle" : "moving";
+
         if (!avoiding_obstacle) {
             // Phase 1: Line following while monitoring for obstacles
             float distance = ultrasonic_get_distance_cm();
@@ -564,24 +581,46 @@ void line_follow_with_obstacle_avoidance(void) {
             }
         }
 
+        // --- derive speed & distance from encoders ---
+    uint32_t now_ms     = to_ms_since_boot(get_absolute_time());
+    uint32_t pulses_now = get_encoder_pulses();
+    uint32_t dpulses    = pulses_now - last_pulses;
+    uint32_t dt_ms      = now_ms - last_samp_ms;
+
+    float speed = 0.0f;  // cm/s
+    if (dt_ms > 0) {
+        float ds_cm = (float)dpulses * CM_PER_PULSE;
+        speed = ds_cm * (1000.0f / (float)dt_ms);  // cm/ms -> cm/s
+        dist += ds_cm;                              // accumulate distance
+        last_pulses  = pulses_now;
+        last_samp_ms = now_ms;
+    }
+
         uint32_t now = to_ms_since_boot(get_absolute_time());
-        printf(mqtt_is_connected() ? "MQTT connected\n" : "MQTT not connected\n");
-        if (mqtt_is_connected() && (now - g_last_pub_ms >= 500)) {
-            printf("MEOWMEOW\n");
-            g_last_pub_ms = now;
+        //printf(mqtt_is_connected() ? "MQTT connected\n" : "MQTT not connected\n");
+        // if (mqtt_is_connected() && (now - g_last_pub_ms >= 500)) {
+        //     printf("MEOWMEOW\n");
+        //     g_last_pub_ms = now;
 
-            float ultra = ultrasonic_get_distance_cm();
-            float speed = 0.0f;   // TODO: derive from encoders
-            float dist  = 0.0f;   // TODO: track distance if you want
-            float yaw   = 0.0f;   // TODO: wire in IMU yaw
+        //     float ultra = ultrasonic_get_distance_cm();
+        //     float speed = 0.0f;   // TODO: derive from encoders
+        //     float dist  = 0.0f;   // TODO: track distance if you want
+        //     float yaw   = 0.0f;   // TODO: wire in IMU yaw
 
-            const char *state = obstacle_detected(ultra) ? "obstacle" : "moving";
-            mqtt_publish_telemetry(speed, dist, yaw, ultra, state);
-        }
+        //     const char *state = obstacle_detected(ultra) ? "obstacle" : "moving";
+        //     mqtt_publish_telemetry(speed, dist, yaw, ultra, state);
+        // }
+        // --- publish telemetry every 500 ms if connected ---
+    if (mqtt_is_connected() && (now_ms - g_last_pub_ms >= 500)) {
+        g_last_pub_ms = now_ms;
+        mqtt_publish_telemetry(speed, dist, yaw, ultra, state);
+    }
 
-        mqtt_publish_telemetry(40.0f, 6.0f, 3.0f, 0.21f, "line_following");
-        // yield CPU (don’t use tight sleep_ms in RTOS loops)
-        vTaskDelay(pdMS_TO_TICKS(50));
+        // mqtt_publish_telemetry(40.0f, 6.0f, 3.0f, 0.21f, "line_following");
+        // // yield CPU (don’t use tight sleep_ms in RTOS loops)
+        // vTaskDelay(pdMS_TO_TICKS(50));
+        // RTOS friendly yield
+    vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 

@@ -10,7 +10,7 @@ if (EXISTS ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c)
                 Obstacle_Avoidance.c        # ADD THIS - Obstacle avoidance functionality
                 barcode.c
                 IMU_movement.c
-            picow_freertos_ping.c       # TCP server functionality
+           # picow_freertos_ping.c       # TCP server functionality
             motor_encoder_demo.c        # Motor and encoder functionality
             ultrasonic.c                # Ultrasonic sensor functionality
             imu_raw_demo.c              # IMU sensor functionality
