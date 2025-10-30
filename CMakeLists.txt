@@ -4,6 +4,8 @@ if (EXISTS ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c)
     # Configuration WITH sockets (recommended for FreeRTOS)
     add_executable(picow_freertos_ping
             main.c                      # Main application file
+            mqtt_client.c              # MQTT client functionality
+            ${PICO_LWIP_PATH}/src/apps/mqtt/mqtt.c  # Force-include lwIP MQTT app source
             PID_Line_Follow.c           # ADD THIS - PID line following functionality
                 Obstacle_Avoidance.c        # ADD THIS - Obstacle avoidance functionality
                 barcode.c
@@ -14,25 +16,34 @@ if (EXISTS ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c)
             imu_raw_demo.c              # IMU sensor functionality
             ir_sensor.c                 # IR sensor functionality
             encoder.c                   # Digital encoder functionality
-            ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c
+           # ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c
             )
         target_compile_definitions(picow_freertos_ping PRIVATE
-                WIFI_SSID=\"${WIFI_SSID}\"
-                WIFI_PASSWORD=\"${WIFI_PASSWORD}\"
+                # WIFI_SSID=\"${WIFI_SSID}\"
+                # WIFI_PASSWORD=\"${WIFI_PASSWORD}\"
+                WIFI_SSID="Fata nos in unum"
+                WIFI_PASSWORD="rosemary"
                 NO_SYS=0                    # Using FreeRTOS with sockets
-                LWIP_SOCKET=1               # Enable socket API
-                PING_USE_SOCKETS=1          # Use sockets for ping
+                #LWIP_SOCKET=1               # Enable socket API
+                #PING_USE_SOCKETS=1          # Use sockets for ping
                 PICO_MAX_SHARED_IRQ_HANDLERS=8
+
+                BROKER_IP="192.168.134.191"        # <-- put YOUR broker IP here
+                BASE_TOPIC="robot/alpha"            # <-- or your preferred base
+                MQTT_PORT=1883
+                MQTT_CLIENT_ID="pico-car"
+                MQTT_KEEPALIVE_S=30
+                
                 )
     target_include_directories(picow_freertos_ping PRIVATE
             ${CMAKE_CURRENT_LIST_DIR}
             ${CMAKE_CURRENT_LIST_DIR}/../.. # for our common lwipopts
-            ${PICO_LWIP_CONTRIB_PATH}/apps/ping
+         #   ${PICO_LWIP_CONTRIB_PATH}/apps/ping
             )
     target_link_libraries(picow_freertos_ping
             pico_cyw43_arch_lwip_sys_freertos  # Use FreeRTOS version
             pico_stdlib
-            pico_lwip_nosys
+            #pico_lwip_nosys
             FreeRTOS-Kernel-Heap4       # FreeRTOS kernel and dynamic heap
             hardware_adc
             hardware_pwm                # for PWM functionality

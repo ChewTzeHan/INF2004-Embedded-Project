@@ -670,47 +670,47 @@ bool barcode_scan_digital_inverted(barcode_result_t *result) {
     return true;
 }
 
-int main(void) {
-    stdio_init_all();
-    setvbuf(stdout, NULL, _IONBF, 0);
+// int main(void) {
+//     stdio_init_all();
+//     setvbuf(stdout, NULL, _IONBF, 0);
 
-    printf("=== IMPROVED BARCODE SCANNER ===\n");
-    printf("Now with longer timeouts and better feedback\n");
+//     printf("=== IMPROVED BARCODE SCANNER ===\n");
+//     printf("Now with longer timeouts and better feedback\n");
 
-    // Initialize digital barcode reader
-    barcode_init();
+//     // Initialize digital barcode reader
+//     barcode_init();
 
-    while (1) {
-        barcode_result_t res;
+//     while (1) {
+//         barcode_result_t res;
         
-        printf("\n" "======" "\n");
-        printf("Ready to scan - move barcode slowly in front of sensor\n");
-        printf("You have 5 seconds to start scanning...\n");
+//         printf("\n" "======" "\n");
+//         printf("Ready to scan - move barcode slowly in front of sensor\n");
+//         printf("You have 5 seconds to start scanning...\n");
         
-        if (barcode_scan_digital_debug(&res)) {
-            printf("\n*** BARCODE SUCCESS ***\n");
-            printf("Data: '%s' len=%u checksum=%d\n",
-                   res.data, (unsigned)res.length, res.checksum_ok);
+//         if (barcode_scan_digital_debug(&res)) {
+//             printf("\n*** BARCODE SUCCESS ***\n");
+//             printf("Data: '%s' len=%u checksum=%d\n",
+//                    res.data, (unsigned)res.length, res.checksum_ok);
             
-            // Parse command if it's a motion command
-            barcode_command_t cmd = barcode_parse_command(res.data);
-            if (cmd != BARCODE_CMD_UNKNOWN) {
-                printf("COMMAND: ");
-                switch (cmd) {
-                    case BARCODE_CMD_LEFT: printf("LEFT\n"); break;
-                    case BARCODE_CMD_RIGHT: printf("RIGHT\n"); break;
-                    case BARCODE_CMD_STOP: printf("STOP\n"); break;
-                    case BARCODE_CMD_FORWARD: printf("FORWARD\n"); break;
-                    default: break;
-                }
-            }
-        } else {
-            printf("\n*** Scan failed or no barcode detected ***\n");
-        }
+//             // Parse command if it's a motion command
+//             barcode_command_t cmd = barcode_parse_command(res.data);
+//             if (cmd != BARCODE_CMD_UNKNOWN) {
+//                 printf("COMMAND: ");
+//                 switch (cmd) {
+//                     case BARCODE_CMD_LEFT: printf("LEFT\n"); break;
+//                     case BARCODE_CMD_RIGHT: printf("RIGHT\n"); break;
+//                     case BARCODE_CMD_STOP: printf("STOP\n"); break;
+//                     case BARCODE_CMD_FORWARD: printf("FORWARD\n"); break;
+//                     default: break;
+//                 }
+//             }
+//         } else {
+//             printf("\n*** Scan failed or no barcode detected ***\n");
+//         }
         
-        printf("Waiting 3 seconds before next scan...\n");
-        sleep_ms(3000);
-    }
+//         printf("Waiting 3 seconds before next scan...\n");
+//         sleep_ms(3000);
+//     }
 
-    return 0;
-}
+//     return 0;
+// }

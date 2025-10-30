@@ -9,6 +9,13 @@
 #include "ir_sensor.h"
 #include "PID_Line_Follow.h"
 #include "ir_sensor.h"
+#include "mqtt_client.h"
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "lwip/netif.h"
+#include "lwip/ip4_addr.h"
+
 
 // ==============================
 // PID LINE FOLLOWING CONSTANTS
@@ -29,6 +36,8 @@ volatile uint32_t encoder_left_count = 0;
 volatile uint32_t encoder_right_count = 0;
 volatile bool last_enc1_state = false;
 volatile bool last_enc2_state = false;
+
+static volatile uint32_t g_last_pub_ms = 0;
 
 // ==============================
 // SERVO CONTROL FUNCTIONS
@@ -510,6 +519,13 @@ void line_follow_with_obstacle_avoidance(void) {
     
     bool system_active = true;
     bool avoiding_obstacle = false;
+
+    // Start Wi-Fi + MQTT (safe: it locks around lwIP calls inside)
+    if (!wifi_and_mqtt_start()) {
+        printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
+    }
+    
+    printf("[NET] Local IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
     
     // Initialize systems
     ultrasonic_init();
@@ -519,6 +535,8 @@ void line_follow_with_obstacle_avoidance(void) {
     reset_encoder_counts();
     
     printf("Starting combined operation...\n");
+
+    uint32_t last_pub = to_ms_since_boot(get_absolute_time());
     
     while (system_active) {
         if (!avoiding_obstacle) {
@@ -534,7 +552,7 @@ void line_follow_with_obstacle_avoidance(void) {
                 printf("🚨 Starting obstacle avoidance procedure...\n");
                 
                 // Execute complete avoidance cycle
-                complete_avoidance_cycle();
+                //complete_avoidance_cycle();
                 
                 printf("🔄 Obstacle avoidance completed. Resuming line following...\n");
                 avoiding_obstacle = false;
@@ -542,11 +560,28 @@ void line_follow_with_obstacle_avoidance(void) {
                 // No need to reset PID variables - they're managed in PID_Line_Follow.c
             } else {
                 // Continue line following
-                follow_line_simple();
+                //follow_line_simple();
             }
         }
-        
-        sleep_ms(50);
+
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+        printf(mqtt_is_connected() ? "MQTT connected\n" : "MQTT not connected\n");
+        if (mqtt_is_connected() && (now - g_last_pub_ms >= 500)) {
+            printf("MEOWMEOW\n");
+            g_last_pub_ms = now;
+
+            float ultra = ultrasonic_get_distance_cm();
+            float speed = 0.0f;   // TODO: derive from encoders
+            float dist  = 0.0f;   // TODO: track distance if you want
+            float yaw   = 0.0f;   // TODO: wire in IMU yaw
+
+            const char *state = obstacle_detected(ultra) ? "obstacle" : "moving";
+            mqtt_publish_telemetry(speed, dist, yaw, ultra, state);
+        }
+
+        mqtt_publish_telemetry(40.0f, 6.0f, 3.0f, 0.21f, "line_following");
+        // yield CPU (don’t use tight sleep_ms in RTOS loops)
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -584,6 +619,12 @@ void calibrate_turning_pulses(void) {
 // int main(void) {
 //     stdio_init_all();
 //     sleep_ms(4000);
+//     printf("=== Obstacle Avoidance Main Program ===\n");
+//     // Wi-Fi + MQTT
+//     if (!wifi_and_mqtt_start()) {
+//         printf("[NET] Wi-Fi/MQTT start failed\n");
+//         // carry on with line following if you want, or return
+//     }
     
 //     printf("\n=== Combined Line Following & Obstacle Avoidance ===\n");
 //     printf("Behavior: Line follow -> Detect obstacle -> Avoid -> Resume line following\n");
@@ -596,3 +637,32 @@ void calibrate_turning_pulses(void) {
     
 //     return 0;
 // }
+
+static void robot_task(void *pv) {
+    // optional: small delay to let USB come up
+    vTaskDelay(pdMS_TO_TICKS(100));
+    line_follow_with_obstacle_avoidance();   // your long-running loop lives here
+    vTaskDelete(NULL);                       // never reached, but good practice
+}
+
+
+int main(void) {
+    stdio_init_all();
+
+    // Create the robot task (stack size can be tuned; 4096 words is a safe start)
+    xTaskCreate(
+        robot_task, 
+        //line_follow_with_obstacle_avoidance,
+        "robot",
+        4096,                  // stack words (increase if needed)
+        NULL,
+        tskIDLE_PRIORITY + 2,  // priority
+        NULL
+    );
+
+    // Start FreeRTOS
+    vTaskStartScheduler();
+
+    // Should never return
+    while (1) { /* idle */ }
+}

@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Robot Car — MQTT Dashboard</title>
+  <style>
+    :root {
+      --bg: #0b1020; --card:#12192f; --ink:#e6ecff; --muted:#9fb1ff; --accent:#4f7cff; --ok:#34c759; --warn:#ffcc00; --bad:#ff3b30;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { margin: 0; font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; color: var(--ink); background: linear-gradient(180deg,#0b1020 0%, #0e1430 100%); }
+    header { padding: 16px 20px; border-bottom: 1px solid #213056; background: #0c1328cc; position: sticky; top: 0; backdrop-filter: blur(6px); z-index: 10; }
+    h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
+    main { max-width: 1200px; margin: 0 auto; padding: 18px; }
+    .grid { display: grid; gap: 14px; grid-template-columns: repeat(12, 1fr); }
+    .card { background: var(--card); border: 1px solid #1e2a4b; border-radius: 14px; padding: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: 1 / -1; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    label { font-size: 12px; color: var(--muted); }
+    input, select, button, textarea { background: #0d1430; color: var(--ink); border: 1px solid #24325d; border-radius: 10px; padding: 10px 12px; font: inherit; }
+    input, select { width: 100%; }
+    button { cursor: pointer; }
+    button.primary { background: var(--accent); border-color: transparent; }
+    button.ghost { background: transparent; border-color: #2a3868; }
+    .stat { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 1px dashed #23335f; }
+    .stat:last-child { border-bottom: 0; }
+    .stat .name { color: var(--muted); font-size: 12px; }
+    .stat .value { font-size: 22px; font-weight: 600; }
+    .pill { font-size: 12px; padding: 4px 8px; border-radius: 999px; border: 1px solid #2a3868; color: var(--muted); }
+    .pill.ok { color: #0f0; border-color:#0f0; }
+    .pill.bad { color: var(--bad); border-color: var(--bad); }
+    .pill.warn { color: var(--warn); border-color: var(--warn); }
+    .kv { display: grid; grid-template-columns: 140px 1fr; gap: 8px 12px; align-items: center; }
+    .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 4px 0 10px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    #log { height: 220px; overflow: auto; white-space: pre-wrap; background: #0b1028; border: 1px dashed #23335f; padding: 10px; border-radius: 12px; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .hint { color: var(--muted); font-size: 12px; }
+    @media (max-width: 980px) { .span-4, .span-6, .span-8 { grid-column: 1 / -1; } .two { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Robot Car - MQTT Dashboard</h1>
+  </header>
+  <main>
+    <div class="grid">
+      <!-- Connection Panel -->
+      <section class="card span-6" id="conn-card">
+        <div class="section-title">Connection</div>
+        <div class="kv">
+          <label for="brokerUrl">Broker WebSocket URL</label>
+          <input id="brokerUrl" placeholder="wss://broker.example.com:8083/mqtt" />
+          <label for="clientId">Client ID</label>
+          <input id="clientId" placeholder="web-dash-xxxx" />
+          <label for="username">Username</label>
+          <input id="username" placeholder="(optional)" />
+          <label for="password">Password</label>
+          <input id="password" type="password" placeholder="(optional)" />
+          <label for="baseTopic">Base Topic</label>
+          <input id="baseTopic" placeholder="robot/alpha" />
+          <label for="qos">QoS</label>
+          <select id="qos"><option value="0">0 (at most once)</option><option value="1" selected>1 (at least once)</option><option value="2">2 (exactly once)</option></select>
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <button class="primary" id="btnConnect">Connect</button>
+          <button class="ghost" id="btnDisconnect">Disconnect</button>
+          <span id="statusPill" class="pill">Disconnected</span>
+        </div>
+        <p class="hint">The dashboard subscribes to either a single JSON topic <span class="mono">{base}/telemetry</span> or individual topics like <span class="mono">{base}/speed</span>, <span class="mono">{base}/imu/yaw</span>, etc. Use whatever your firmware publishes.</p>
+      </section>
+
+      <!-- Live Stats -->
+      <section class="card span-6">
+        <div class="section-title">Live Stats</div>
+        <div class="stat"><div class="name">Speed</div><div class="value" id="speed">—</div><div class="pill" id="speedSrc">—</div></div>
+        <div class="stat"><div class="name">Distance</div><div class="value" id="distance">—</div><div class="pill" id="distanceSrc">—</div></div>
+        <div class="stat"><div class="name">Heading (Yaw)</div><div class="value" id="yaw">—</div><div class="pill" id="yawSrc">—</div></div>
+        <div class="stat"><div class="name">Line Position / IR</div><div class="value" id="line">—</div><div class="pill" id="lineSrc">—</div></div>
+        <div class="stat"><div class="name">Ultrasonic</div><div class="value" id="ultra">—</div><div class="pill" id="ultraPill">—</div></div>
+        <div class="stat"><div class="name">State</div><div class="value" id="state">—</div><div class="pill" id="statePill">—</div></div>
+      </section>
+
+      <!-- Controls -->
+      <section class="card span-8">
+        <div class="section-title">Commands (publish)</div>
+        <div class="two">
+          <div>
+            <label>Barcode Command</label>
+            <div class="row">
+              <button data-cmd="LEFT">LEFT</button>
+              <button data-cmd="RIGHT">RIGHT</button>
+              <button data-cmd="STOP">STOP</button>
+              <button data-cmd="U-TURN">U‑TURN</button>
+            </div>
+          </div>
+          <div>
+            <label>Raw JSON</label>
+            <div class="row">
+              <input id="rawPayload" value='{"type":"set_speed","value":35}' />
+              <button id="btnSendRaw">Send</button>
+            </div>
+            <p class="hint">Published to <span class="mono">{base}/cmd</span> with selected QoS.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Recent Events -->
+      <section class="card span-4">
+        <div class="section-title">Recent Events</div>
+        <div id="events" class="mono" style="font-size:13px; line-height:1.4; max-height:240px; overflow:auto;"></div>
+      </section>
+
+      <!-- Logs -->
+      <section class="card span-12">
+        <div class="section-title">MQTT Log</div>
+        <div id="log" class="mono"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- mqtt.js (standalone browser build) -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script>
+  (function(){
+    const $ = (id) => document.getElementById(id);
+    const statusPill = $('statusPill');
+    const log = $('log');
+    const events = $('events');
+
+    const ui = {
+      speed: $('speed'), speedSrc: $('speedSrc'),
+      distance: $('distance'), distanceSrc: $('distanceSrc'),
+      yaw: $('yaw'), yawSrc: $('yawSrc'),
+      line: $('line'), lineSrc: $('lineSrc'),
+      ultra: $('ultra'), ultraPill: $('ultraPill'),
+      state: $('state'), statePill: $('statePill')
+    };
+
+    let client = null;
+    let base = localStorage.getItem('baseTopic') || 'robot/alpha';
+    let qos = +(localStorage.getItem('qos') || 1);
+
+    // Restore inputs
+    $('brokerUrl').value = localStorage.getItem('brokerUrl') || '';
+    $('clientId').value = localStorage.getItem('clientId') || ('web-dash-' + Math.random().toString(16).slice(2));
+    $('username').value = localStorage.getItem('username') || '';
+    $('password').value = localStorage.getItem('password') || '';
+    $('baseTopic').value = base;
+    $('qos').value = String(qos);
+
+    function setStatus(txt, cls){ statusPill.textContent = txt; statusPill.className = 'pill ' + (cls||''); }
+    function addLog(line){ const at = new Date().toLocaleTimeString(); log.textContent += `[${at}] ${line}\n`; log.scrollTop = log.scrollHeight; }
+    function addEvent(line){ const at = new Date().toLocaleTimeString(); const p = document.createElement('div'); p.textContent = `[${at}] ${line}`; events.prepend(p); while(events.children.length>12) events.lastChild.remove(); }
+
+    function saveInputs(){
+      localStorage.setItem('brokerUrl', $('brokerUrl').value.trim());
+      localStorage.setItem('clientId', $('clientId').value.trim());
+      localStorage.setItem('username', $('username').value);
+      localStorage.setItem('password', $('password').value);
+      localStorage.setItem('baseTopic', $('baseTopic').value.trim());
+      localStorage.setItem('qos', $('qos').value);
+    }
+
+    function topics(){
+      base = $('baseTopic').value.trim() || 'robot/alpha';
+      return {
+        tele: `${base}/telemetry`,
+        speed: `${base}/speed`,
+        distance: `${base}/distance`,
+        yaw: `${base}/imu/yaw`,
+        pitch: `${base}/imu/pitch`,
+        roll: `${base}/imu/roll`,
+        ir: `${base}/ir/raw`,
+        linePos: `${base}/line/pos`,
+        ultra: `${base}/ultra/cm`,
+        state: `${base}/state`,
+        barcode: `${base}/barcode`,
+        cmd: `${base}/cmd`,
+      };
+    }
+
+    function subscribeAll(){
+      const t = topics();
+      const list = [t.tele, t.speed, t.distance, t.yaw, t.pitch, t.roll, t.ir, t.linePos, t.ultra, t.state, t.barcode];
+      list.forEach(tp => client.subscribe(tp, {qos}, (err)=>{ if(err) addLog(`subscribe error ${tp}: ${err}`);}));
+      addLog('Subscribed to ' + list.join(', '));
+    }
+
+    function parseMaybeJSON(payload){
+      try { return JSON.parse(payload); } catch { return null; }
+    }
+
+    function setValue(el, val, src){ if(el) el.textContent = val; if(src) src.textContent = src.dataset.lbl || 'topic'; }
+
+    function applyTelemetry(obj){
+      if(!obj) return;
+      if('speed' in obj) { ui.speed.textContent = obj.speed + ' cm/s'; ui.speedSrc.textContent = 'telemetry'; }
+      if('distance' in obj) { ui.distance.textContent = obj.distance + ' cm'; ui.distanceSrc.textContent = 'telemetry'; }
+      if('imu' in obj && obj.imu){ if('yaw' in obj.imu){ ui.yaw.textContent = obj.imu.yaw.toFixed(1) + '°'; ui.yawSrc.textContent = 'telemetry'; }}
+      if('ir_raw' in obj){ ui.line.textContent = obj.ir_raw; ui.lineSrc.textContent = 'telemetry'; }
+      if('ultra_cm' in obj){ ui.ultra.textContent = obj.ultra_cm.toFixed(1) + ' cm'; ui.ultraPill.textContent = (obj.ultra_cm>0 && obj.ultra_cm<30? 'OBSTACLE':'CLEAR'); ui.ultraPill.className = 'pill ' + (obj.ultra_cm>0 && obj.ultra_cm<30? 'bad':'ok'); }
+      if('state' in obj){ ui.state.textContent = obj.state; ui.statePill.textContent = 'telemetry'; }
+      if('barcode' in obj){ addEvent('BARCODE: ' + obj.barcode); }
+    }
+
+    function connect(){
+      saveInputs();
+      const url = $('brokerUrl').value.trim();
+      const opts = {
+        clientId: $('clientId').value.trim(),
+        username: $('username').value || undefined,
+        password: $('password').value || undefined,
+        clean: true,
+        reconnectPeriod: 2000,
+        connectTimeout: 10_000,
+        protocolVersion: 4,
+      };
+      qos = +$('qos').value || 1;
+      addLog('Connecting to ' + url + ' …');
+      try {
+        client = mqtt.connect(url, opts);
+      } catch (e) {
+        addLog('Connect error: ' + e.message);
+        setStatus('Error', 'bad');
+        return;
+      }
+
+      client.on('connect', () => { setStatus('Connected', 'ok'); addLog('Connected.'); subscribeAll(); });
+      client.on('reconnect', () => { setStatus('Reconnecting…', 'warn'); addLog('Reconnecting…'); });
+      client.on('close', () => { setStatus('Disconnected', ''); addLog('Connection closed'); });
+      client.on('error', (err) => { setStatus('Error', 'bad'); addLog('Error: ' + (err && err.message || err)); });
+
+      client.on('message', (topic, payloadBuf) => {
+        const payload = payloadBuf.toString();
+        const t = topics();
+        if(topic === t.tele){ const obj = parseMaybeJSON(payload); applyTelemetry(obj); return; }
+        if(topic === t.speed){ ui.speed.textContent = payload + ' cm/s'; ui.speedSrc.textContent = 'topic'; return; }
+        if(topic === t.distance){ ui.distance.textContent = payload + ' cm'; ui.distanceSrc.textContent = 'topic'; return; }
+        if(topic === t.yaw){ ui.yaw.textContent = Number(payload).toFixed(1) + '°'; ui.yawSrc.textContent = 'topic'; return; }
+        if(topic === t.ir || topic === t.linePos){ ui.line.textContent = payload; ui.lineSrc.textContent = 'topic'; return; }
+        if(topic === t.ultra){ const cm = parseFloat(payload); ui.ultra.textContent = cm.toFixed(1) + ' cm'; const alarm = cm>0 && cm<30; ui.ultraPill.textContent = alarm? 'OBSTACLE':'CLEAR'; ui.ultraPill.className = 'pill ' + (alarm? 'bad':'ok'); return; }
+        if(topic === t.state){ ui.state.textContent = payload; ui.statePill.textContent = 'topic'; return; }
+        if(topic === t.barcode){ addEvent('BARCODE: ' + payload); return; }
+        addLog(`topic ${topic} => ${payload}`);
+      });
+    }
+
+    function disconnect(){ if(client){ try{ client.end(true); addLog('Disconnected by user'); } catch{} } setStatus('Disconnected',''); }
+
+    function publishCmd(obj){ if(!client || !client.connected){ addLog('Not connected'); return; } const t = topics().cmd; const p = JSON.stringify(obj); client.publish(t, p, { qos }, (e)=>{ if(e) addLog('Publish error: ' + e); }); addEvent('CMD → ' + p); }
+
+    // Bindings
+    $('btnConnect').addEventListener('click', connect);
+    $('btnDisconnect').addEventListener('click', disconnect);
+
+    document.querySelectorAll('[data-cmd]').forEach(btn => btn.addEventListener('click', () => {
+      const type = 'barcode';
+      const value = btn.dataset.cmd; // LEFT/RIGHT/STOP/U-TURN
+      publishCmd({ type, value });
+    }));
+    $('btnSendRaw').addEventListener('click', ()=>{
+      let txt = $('rawPayload').value; try{ JSON.parse(txt); } catch(e){ addLog('Raw JSON is invalid: ' + e.message); return; } publishCmd(JSON.parse(txt));
+    });
+
+    // Little helper: pressing Enter in URL connects
+    $('brokerUrl').addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ connect(); }});
+  })();
+  </script>
+</body>
+</html>
