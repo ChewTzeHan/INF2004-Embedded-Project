@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <math.h>
+#include <stdbool.h>
+#include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "FreeRTOS.h"
@@ -9,29 +11,38 @@
 #define ACC_ADDR 0x19
 #define MAG_ADDR 0x1E
 #define I2C_INST i2c0
-#define I2C_SDA_PIN 16 //GPIO 16 for SDA on Pico Robot Microcontroller, GPIO 20 for Personal Pico Microcontroller
-#define I2C_SCL_PIN 17 //GPIO 17 for SCL on Pico Robot Microcontroller, GPIO 21 for Personal Pico Microcontroller
+#define I2C_SDA_PIN 16
+#define I2C_SCL_PIN 17
 #define FILTER_SIZE 10
 #define M_PI 3.14159265358979323846
 
-// ========== Magnetometer calibration (replace after calibration) ==========
-/*#define MAG_OFFSET_X  (-100.0f)
-#define MAG_OFFSET_Y  (200.0f)
-#define MAG_OFFSET_Z  (50.0f)
-#define MAG_SCALE_X   (1.05f)
-#define MAG_SCALE_Y   (0.97f)
-#define MAG_SCALE_Z   (1.00f)*/
+// ========== Magnetometer Calibration ==========
+typedef struct {
+    float offset_x, offset_y, offset_z;
+    float scale_x, scale_y, scale_z;
+} mag_calibration_t;
 
-#define MAG_SCALE_X   (105.0f)
-#define MAG_SCALE_Y   (38.5f)
-#define MAG_SCALE_Z   (63.5f)
-#define MAG_OFFSET_X  (-258.0f)
-#define MAG_OFFSET_Y  (-248.5f)
-#define MAG_OFFSET_Z  (-342.5f)
+static mag_calibration_t mag_cal = {
+    .offset_x = 10.0f, 
+    .offset_y = -126.0f, 
+    .offset_z = -200.0f,
+    .scale_x = 341.2f, 
+    .scale_y = 341.2f, 
+    .scale_z = 341.2f
+};
 
 // ========== Filter parameters ==========
-#define ACCEL_ALPHA  0.1f
-#define YAW_ALPHA    0.2f
+#define ACCEL_ALPHA  0.05f
+#define JERK_THRESHOLD   120.0f
+
+// ========== Magnetometer Filter Parameters ==========
+#define MAG_FILTER_SIZE 5  // REDUCED from 10 for faster response
+#define BASELINE_MAG_STRENGTH 1.36f
+#define STRENGTH_TOLERANCE 0.3f
+
+// ========== NEW: Motion Detection Parameters ==========
+#define ANGULAR_VELOCITY_THRESHOLD 3.0f  // degrees per sample to detect rotation
+#define STATIONARY_THRESHOLD 1.0f        // degrees per sample for stationary
 
 // ========== Globals ==========
 static int filter_index = 0;
@@ -41,30 +52,57 @@ static int16_t az_history[FILTER_SIZE] = {0};
 static float last_total_accel = 0;
 static float pitch_filtered = 0.0f;
 static float roll_filtered  = 0.0f;
-static float yaw_filtered   = 0.0f;
 
-// -------------------- INITIALIZATION --------------------
+// Magnetometer filtering - REDUCED SIZE
+static float mx_history[MAG_FILTER_SIZE] = {0};
+static float my_history[MAG_FILTER_SIZE] = {0};
+static int mag_filter_idx = 0;
+static int mag_samples_count = 0;  // Track warmup
+
+// Heading tracking
+static float heading_filtered = 0.0f;
+static float heading_reference = 0.0f;
+static bool heading_initialized = false;
+static float last_valid_heading = 0.0f;
+static float last_raw_heading = 0.0f;  // NEW: For velocity calculation
+
+// ========== Angle utilities ==========
+float normalize_angle(float angle) {
+    while (angle >= 360.0f) angle -= 360.0f;
+    while (angle < 0.0f) angle += 360.0f;
+    return angle;
+}
+
+float angle_difference(float a, float b) {
+    float diff = a - b;
+    while (diff > 180.0f) diff -= 360.0f;
+    while (diff < -180.0f) diff += 360.0f;
+    return diff;
+}
+
+// ========== I2C Initialization ==========
 void imu_init() {
-    stdio_init_all();
+    //stdio_init_all();
     sleep_ms(100);
 
-    i2c_init(I2C_INST, 100);
+    i2c_init(I2C_INST, 100000);
     gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL_PIN, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SDA_PIN);
     gpio_pull_up(I2C_SCL_PIN);
 
-    printf("\nGY-511 LSM303DLHC Robot IMU Starting...\n");
+    printf("\n=== LSM303DLHC IMU Initialization ===\n");
+    
     uint8_t acc_config[] = {0x20, 0x27};
     i2c_write_blocking(I2C_INST, ACC_ADDR, acc_config, 2, false);
 
     uint8_t mag_config[] = {0x02, 0x00};
     i2c_write_blocking(I2C_INST, MAG_ADDR, mag_config, 2, false);
 
-    printf("Robot IMU System Active (Polling mode)\n\n");
+    printf("IMU Ready\n\n");
 }
 
-// -------------------- SENSOR READINGS --------------------
+// ========== Sensor Reading ==========
 bool read_accel_raw(int16_t *raw_ax, int16_t *raw_ay, int16_t *raw_az) {
     uint8_t acc_data[6];
     uint8_t reg = 0x28 | 0x80;
@@ -81,16 +119,17 @@ bool read_accel_raw(int16_t *raw_ax, int16_t *raw_ay, int16_t *raw_az) {
 bool read_mag_raw(int16_t *mx, int16_t *my, int16_t *mz) {
     uint8_t mag_data[6];
     uint8_t reg = 0x03;
+    
     if (i2c_write_blocking(I2C_INST, MAG_ADDR, &reg, 1, true) != 1) return false;
     if (i2c_read_blocking(I2C_INST, MAG_ADDR, mag_data, 6, false) != 6) return false;
 
     *mx = (int16_t)((mag_data[0] << 8) | mag_data[1]);
-    *my = (int16_t)((mag_data[2] << 8) | mag_data[3]);
-    *mz = (int16_t)((mag_data[4] << 8) | mag_data[5]); 
+    *mz = (int16_t)((mag_data[2] << 8) | mag_data[3]);
+    *my = (int16_t)((mag_data[4] << 8) | mag_data[5]);
     return true;
 }
 
-// -------------------- FILTER --------------------
+// ========== Filters ==========
 int16_t apply_filter(int16_t raw_value, int16_t history[], int *index) {
     history[*index] = raw_value;
     *index = (*index + 1) % FILTER_SIZE;
@@ -99,7 +138,18 @@ int16_t apply_filter(int16_t raw_value, int16_t history[], int *index) {
     return (int16_t)(sum / FILTER_SIZE);
 }
 
-// -------------------- GRAVITY REMOVAL --------------------
+void sort_float_array(float *arr, int size) {
+    for (int i = 0; i < size - 1; i++) {
+        for (int j = 0; j < size - i - 1; j++) {
+            if (arr[j] > arr[j + 1]) {
+                float temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+    }
+}
+
 void remove_gravity_and_transform_frame(float *ax, float *ay, float *az, float pitch, float roll) {
     float pitch_rad = pitch * M_PI / 180.0f;
     float roll_rad  = roll * M_PI / 180.0f;
@@ -126,283 +176,275 @@ void remove_gravity_and_transform_frame(float *ax, float *ay, float *az, float p
     *az = x_rot * sin_p + z_rot * cos_p;
 }
 
-// -------------------- ORIENTATION --------------------
 void calculate_orientation(int16_t ax, int16_t ay, int16_t az, float *pitch, float *roll) {
     float pitch_raw = atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / M_PI;
     float roll_raw  = atan2f(ay, az) * 180.0f / M_PI;
 
-    pitch_filtered = ACCEL_ALPHA * pitch_raw + (1 - ACCEL_ALPHA) * pitch_filtered;
-    roll_filtered  = ACCEL_ALPHA * roll_raw  + (1 - ACCEL_ALPHA) * roll_filtered;
+    pitch_filtered = ACCEL_ALPHA * pitch_raw + (1.0f - ACCEL_ALPHA) * pitch_filtered;
+    roll_filtered  = ACCEL_ALPHA * roll_raw  + (1.0f - ACCEL_ALPHA) * roll_filtered;
 
     *pitch = pitch_filtered;
     *roll  = roll_filtered;
 }
 
-// -------------------- YAW CALCULATION --------------------
-float calculate_yaw(int16_t mx, int16_t my, int16_t mz, float pitch_deg, float roll_deg) {
-    // ===== Apply calibration (hard-iron and soft-iron correction) =====
-    float mx_cal = (mx - MAG_OFFSET_X) / MAG_SCALE_X;
-    float my_cal = (my - MAG_OFFSET_Y) / MAG_SCALE_Y;
-    float mz_cal = (mz - MAG_OFFSET_Z) / MAG_SCALE_Z;
-
-    // ===== Convert pitch/roll to radians =====
-    float pitch = pitch_deg * M_PI / 180.0f;
-    float roll  = roll_deg  * M_PI / 180.0f;
-
-    // ===== Tilt compensation =====
-    // Compensate the magnetic field measurements for tilt
-    float Mx_comp = mx_cal * cosf(pitch) + mz_cal * sinf(pitch);
-    float My_comp = mx_cal * sinf(roll) * sinf(pitch)
-                  + my_cal * cosf(roll)
-                  - mz_cal * sinf(roll) * cosf(pitch);
-
-    // ===== Handle near-zero values to prevent NaNs =====
-    if (fabsf(Mx_comp) < 1e-3f && fabsf(My_comp) < 1e-3f) {
-        return yaw_filtered; // skip if unstable
+// ========== FAST RESPONSE HEADING with Motion-Adaptive Filtering ==========
+float get_heading_fast(float *direction_str) {
+    int16_t mx_raw, my_raw, mz_raw;
+    if (!read_mag_raw(&mx_raw, &my_raw, &mz_raw)) {
+        return heading_filtered;
     }
 
-    // ===== Compute yaw in degrees =====
-    float yaw_raw = atan2f(-My_comp, Mx_comp) * 180.0f / M_PI;
+    // Apply calibration
+    float mx = (mx_raw - mag_cal.offset_x) / mag_cal.scale_x;
+    float my = (my_raw - mag_cal.offset_y) / mag_cal.scale_y;
 
-    // ===== Convert to navigation heading (0° = North, clockwise increase) =====
-    yaw_raw = 90.0f - yaw_raw;
-    if (yaw_raw < 0) yaw_raw += 360.0f;
-    if (yaw_raw >= 360.0f) yaw_raw -= 360.0f;
-
-    // ===== Low-pass filter for stability =====
-    yaw_filtered = YAW_ALPHA * yaw_raw + (1 - YAW_ALPHA) * yaw_filtered;
-    return yaw_filtered;
-}
-
-float calculate_simple_yaw(int16_t mx, int16_t my) {
-    // Apply calibration to X and Y axes only
-    float mx_cal = (mx - MAG_OFFSET_X) / MAG_SCALE_X;
-    float my_cal = (my - MAG_OFFSET_Y) / MAG_SCALE_Y;
+    // === LIGHTWEIGHT MEDIAN FILTER (smaller window) ===
+    mx_history[mag_filter_idx] = mx;
+    my_history[mag_filter_idx] = my;
+    mag_filter_idx = (mag_filter_idx + 1) % MAG_FILTER_SIZE;
+    mag_samples_count = (mag_samples_count < MAG_FILTER_SIZE) ? mag_samples_count + 1 : MAG_FILTER_SIZE;
     
-    // Basic yaw calculation (mathematical standard)
-    float yaw = atan2f(-my_cal, mx_cal) * 180.0f / M_PI;
+    // Only use available samples during warmup
+    int samples_to_use = mag_samples_count;
     
-    // Convert to navigation standard (0° = North, clockwise)
-    // yaw = 90.0f - yaw;
-    if (yaw < 0) yaw += 360.0f;
-    // if (yaw >= 360.0f) yaw -= 360.0f;
+    float mx_sorted[MAG_FILTER_SIZE];
+    memcpy(mx_sorted, mx_history, samples_to_use * sizeof(float));
+    sort_float_array(mx_sorted, samples_to_use);
+    float mx_median = mx_sorted[samples_to_use / 2];
     
-    // Add filtering
-    yaw_filtered = YAW_ALPHA * yaw + (1 - YAW_ALPHA) * yaw_filtered;
-    return yaw_filtered;
-}
+    float my_sorted[MAG_FILTER_SIZE];
+    memcpy(my_sorted, my_history, samples_to_use * sizeof(float));
+    sort_float_array(my_sorted, samples_to_use);
+    float my_median = my_sorted[samples_to_use / 2];
 
-// -------------------- ANGLE NORMALIZATION --------------------
-/*float normalize_angle(float angle) {
-    while (angle < 0) angle += 360.0f;
-    while (angle >= 360.0f) angle -= 360.0f;
-    return angle;
-}*/
+    // === MAGNETIC FIELD STRENGTH CHECK ===
+    float mag_strength = sqrtf(mx_median * mx_median + my_median * my_median);
+    bool has_interference = (fabsf(mag_strength - BASELINE_MAG_STRENGTH) > STRENGTH_TOLERANCE);
+    
+    // Calculate heading from filtered magnetometer data
+    float heading_raw = atan2f(my_median, mx_median) * 180.0f / M_PI;
+    heading_raw = normalize_angle(heading_raw);
 
-// -------------------- CALIBRATION TOOLS --------------------
-
-// 1. Print raw magnetometer values for calibration
-void print_raw_mag_calibration() {
-    int16_t mx, my, mz;
-    if (read_mag_raw(&mx, &my, &mz)) {
-        printf("RAW_MAG: X:%6d, Y:%6d, Z:%6d\n", mx, my, mz);
+    // Initialize reference on first valid reading
+    if (!heading_initialized) {
+        heading_reference = heading_raw;
+        heading_filtered = 0.0f;
+        heading_initialized = true;
+        last_valid_heading = 0.0f;
+        last_raw_heading = heading_raw;
+        printf("\n[INIT] Heading 0° = Current orientation (Baseline: %.2f)\n", mag_strength);
+        return 0.0f;
     }
-}
 
-// 2. Simple calibration by finding min/max values
-void simple_calibration() {
-    printf("\n=== Starting Magnetometer Calibration ===\n");
-    printf("Rotate the IMU in all directions for 30 seconds...\n");
+    // Convert to relative heading
+    float relative_heading = angle_difference(heading_raw, heading_reference);
+    relative_heading = normalize_angle(relative_heading);
+
+    // === MOTION-ADAPTIVE FILTERING (Key optimization!) ===
+    float angular_velocity = fabsf(angle_difference(heading_raw, last_raw_heading));
+    last_raw_heading = heading_raw;
     
-    int16_t min_x = 32767, max_x = -32768;
-    int16_t min_y = 32767, max_y = -32768;
-    int16_t min_z = 32767, max_z = -32768;
+    float alpha;
     
-    int successful_reads = 0;
-    int failed_reads = 0;
-    
-    absolute_time_t start_time = get_absolute_time();
-    
-    while (absolute_time_diff_us(start_time, get_absolute_time()) < 30000000) {
-        int16_t mx, my, mz;
-        if (read_mag_raw(&mx, &my, &mz)) {
-            successful_reads++;
-            
-            if (mx < min_x) min_x = mx;
-            if (mx > max_x) max_x = mx;
-            if (my < min_y) min_y = my;
-            if (my > max_y) max_y = my;
-            if (mz < min_z) min_z = mz;
-            if (mz > max_z) max_z = mz;
-            
-            printf("Success: %d | Failed: %d | X:%6d Y:%6d Z:%6d\r", 
-                   successful_reads, failed_reads, mx, my, mz);
+    if (has_interference) {
+        // During interference, still responsive but more cautious
+        if (angular_velocity > ANGULAR_VELOCITY_THRESHOLD) {
+            alpha = 0.4f;  // FAST even during interference if rotating
+            printf("[INT+ROT:%.2f] ", mag_strength);
         } else {
-            failed_reads++;
-            printf("READ FAILED! Total fails: %d\r", failed_reads);
+            alpha = 0.1f;  // Slower when stationary with interference
+            printf("[INT:%.2f] ", mag_strength);
         }
-        sleep_ms(100);
+    } else {
+        // Clean signal - use velocity-based adaptation
+        if (angular_velocity > ANGULAR_VELOCITY_THRESHOLD) {
+            alpha = 0.7f;  // VERY FAST during rotation
+            printf("[FAST↻] ");
+        } else if (angular_velocity > STATIONARY_THRESHOLD) {
+            alpha = 0.4f;  // Medium speed for slow rotation
+        } else {
+            alpha = 0.2f;  // Slower when stationary for stability
+        }
     }
     
-    printf("\n\n=== CALIBRATION RESULTS ===\n");
-    printf("Successful reads: %d, Failed reads: %d\n", successful_reads, failed_reads);
+    // Apply exponential filter with adaptive alpha
+    float diff_to_filter = angle_difference(relative_heading, heading_filtered);
+    heading_filtered = normalize_angle(heading_filtered + alpha * diff_to_filter);
     
-    if (successful_reads == 0) {
-        printf("ERROR: No magnetometer readings! Check wiring.\n");
-        return;
-    }
-    while(1){
-        printf("Min: X:%6d Y:%6d Z:%6d\n", min_x, min_y, min_z);
-        printf("Max: X:%6d Y:%6d Z:%6d\n", max_x, max_y, max_z);
-        
-        printf("\nHard Iron Offsets:\n");
-        printf("#define MAG_OFFSET_X  (%.1ff)\n", (max_x + min_x) / 2.0f);
-        printf("#define MAG_OFFSET_Y  (%.1ff)\n", (max_y + min_y) / 2.0f);
-        printf("#define MAG_OFFSET_Z  (%.1ff)\n", (max_z + min_z) / 2.0f);
-        
-        printf("\nScale Factors:\n");
-        printf("#define MAG_SCALE_X   (%.1ff)\n", (max_x - min_x) / 2.0f);
-        printf("#define MAG_SCALE_Y   (%.1ff)\n", (max_y - min_y) / 2.0f);
-        printf("#define MAG_SCALE_Z   (%.1ff)\n", (max_z - min_z) / 2.0f);
+    // Direction indicator (CW/CCW)
+    if (direction_str) {
+        float rotation_speed = angle_difference(heading_filtered, last_valid_heading);
+        if (rotation_speed > 0.5f) {
+            *direction_str = 1.0f;  // Clockwise
+        } else if (rotation_speed < -0.5f) {
+            *direction_str = -1.0f;  // Counter-clockwise
+        } else {
+            *direction_str = 0.0f;  // Stationary
+        }
     }
     
+    last_valid_heading = heading_filtered;
+    return heading_filtered;
 }
 
-// Add accelerometer calibration
-void calibrate_accelerometer() {
-    printf("\n=== Accelerometer Calibration ===\n");
-    printf("Place sensor flat on table for +1g Z-axis...\n");
-    sleep_ms(3000);
-    
-    int32_t sum_ax = 0, sum_ay = 0, sum_az = 0;
-    int samples = 100;
-    
-    for (int i = 0; i < samples; i++) {
-        int16_t ax, ay, az;
-        if (read_accel_raw(&ax, &ay, &az)) {
-            sum_ax += ax;
-            sum_ay += ay; 
-            sum_az += az;
-        }
-        sleep_ms(10);
-    }
-    
-    float offset_x = sum_ax / (float)samples;
-    float offset_y = sum_ay / (float)samples;
-    float offset_z = (sum_az / (float)samples) - 1000.0f; // -1g for Z when flat
-    
-    printf("Accelerometer Offsets:\n");
-    printf("X: %.1f, Y: %.1f, Z: %.1f\n", offset_x, offset_y, offset_z);
+void reset_heading_reference() {
+    heading_initialized = false;
+    mag_samples_count = 0;  // Reset filter warmup
+    printf("\n[RESET] Heading reference reset\n");
 }
 
-// -------------------- COMPUTE AND PRINT --------------------
+// ========== Main Processing ==========
 void compute_and_print_data(int16_t ax, int16_t ay, int16_t az) {
     int16_t ax_filtered = apply_filter(ax, ax_history, &filter_index);
     int16_t ay_filtered = apply_filter(ay, ay_history, &filter_index);
     int16_t az_filtered = apply_filter(az, az_history, &filter_index);
 
-    int16_t mx, my, mz;
-    if (!read_mag_raw(&mx, &my, &mz)) {
-        printf(" MAG_FAILED\n");
-        return;
-    }
-
     float pitch, roll;
     calculate_orientation(ax_filtered, ay_filtered, az_filtered, &pitch, &roll);
 
-    // ✅ Use the tilt-compensated yaw function
-    float yaw = calculate_simple_yaw(mx, my);
+    // Use fast heading function
+    float direction = 0.0f;
+    float heading = get_heading_fast(&direction);
 
-    // Transform accelerometer readings and detect motion
     float ax_f = ax_filtered, ay_f = ay_filtered, az_f = az_filtered;
     remove_gravity_and_transform_frame(&ax_f, &ay_f, &az_f, pitch, roll);
 
     float total_accel = sqrtf(ax_f * ax_f + ay_f * ay_f + az_f * az_f);
     float accel_change = fabsf(total_accel - last_total_accel);
     last_total_accel = total_accel;
-    bool is_jerky = (accel_change > 200);
 
-    printf("\nX:%6d Y:%6d Z:%6d | ", ax_filtered, ay_filtered, az_filtered);
-    printf("Yaw:%6.1f° Pitch:%6.1f° Roll:%6.1f° | Jerk:%5.0f", yaw, pitch, roll, accel_change);
-    if (is_jerky) printf(" [JERKY]");
-    else printf("         ");
+    bool is_jerky = (accel_change > JERK_THRESHOLD);
+
+    printf("\nAcc X:%6d Y:%6d Z:%6d | ", ax_filtered, ay_filtered, az_filtered);
+    printf("Heading:%6.1f° Pitch:%5.1f° Roll:%5.1f° | ", heading, pitch, roll);
+    printf("Jerk:%5.0f ", accel_change);
+    
+    if (direction > 0.5f) {
+        printf("CW↻  ");
+    } else if (direction < -0.5f) {
+        printf("CCW↺ ");
+    } else {
+        printf("---  ");
+    }
+
+    if (is_jerky) {
+        printf("[JERKY]");
+    }
+    
+    printf("\r");
+    fflush(stdout);
 }
 
+// ========== Calibration ==========
+void simple_calibration() {
+    printf("\n=== MAGNETOMETER CALIBRATION ===\n");
+    printf("Slowly rotate IMU in all directions for 30 seconds\n");
+    printf("Cover all orientations with figure-8 motions\n");
+    printf("IMPORTANT: Do this in the same location where you'll use the IMU!\n\n");
 
-// -------------------- MAIN LOOP (TEST DIFFERENT MODES) --------------------
+    int16_t min_x = 32767, max_x = -32768;
+    int16_t min_y = 32767, max_y = -32768;
+    int16_t min_z = 32767, max_z = -32768;
+
+    absolute_time_t start = get_absolute_time();
+    int samples = 0;
+
+    while (absolute_time_diff_us(start, get_absolute_time()) < 30000000) {
+        int16_t mx, my, mz;
+        if (read_mag_raw(&mx, &my, &mz)) {
+            samples++;
+            if (mx < min_x) min_x = mx;
+            if (mx > max_x) max_x = mx;
+            if (my < min_y) min_y = my;
+            if (my > max_y) max_y = my;
+            if (mz < min_z) min_z = mz;
+            if (mz > max_z) max_z = mz;
+
+            if (samples % 10 == 0) {
+                printf("X[%5d,%5d] Y[%5d,%5d] Z[%5d,%5d] N=%d\r",
+                       min_x, max_x, min_y, max_y, min_z, max_z, samples);
+            }
+        }
+        sleep_ms(50);
+    }
+
+    printf("\n\n=== CALIBRATION RESULTS ===\n");
+    
+    mag_cal.offset_x = (max_x + min_x) / 2.0f;
+    mag_cal.offset_y = (max_y + min_y) / 2.0f;
+    mag_cal.offset_z = (max_z + min_z) / 2.0f;
+
+    mag_cal.scale_x = (max_x - min_x) / 2.0f;
+    mag_cal.scale_y = (max_y - min_y) / 2.0f;
+    mag_cal.scale_z = (max_z - min_z) / 2.0f;
+
+    printf("Hard Iron Offsets: X=%.1f, Y=%.1f, Z=%.1f\n", 
+        mag_cal.offset_x, mag_cal.offset_y, mag_cal.offset_z);
+    printf("Soft Iron Scales: X=%.1f, Y=%.1f, Z=%.1f\n", 
+        mag_cal.scale_x, mag_cal.scale_y, mag_cal.scale_z);
+    
+    printf("\n=== Update these values in your code: ===\n");
+    printf(".offset_x=%.1ff, .offset_y=%.1ff, .offset_z=%.1ff,\n",
+           mag_cal.offset_x, mag_cal.offset_y, mag_cal.offset_z);
+    printf(".scale_x=%.1ff, .scale_y=%.1ff, .scale_z=%.1ff\n",
+           mag_cal.scale_x, mag_cal.scale_y, mag_cal.scale_z);
+}
+
+// ========== Main ==========
 // int main(void) {
 //     stdio_init_all();
 //     imu_init();
+//     sleep_ms(2000);
 
-//     // Wait for serial to be ready
-//     sleep_ms(5000);
-    
-//     printf("\n\n=== IMU CALIBRATION TOOL ===\n");
-//     printf("Choose mode:\n");
+//     printf("\n=== IMU HEADING TRACKER (FAST RESPONSE) ===\n");
+//     printf("Features: Motion-adaptive filtering for instant response\n");
 //     printf("1 - Normal operation\n");
-//     printf("2 - Raw magnetometer values\n");
-//     printf("3 - Run calibration\n");
-//     printf("Enter choice (1, 2, or 3): ");
-    
-//     // Clear any existing serial buffer
+//     printf("2 - Calibrate magnetometer\n");
+//     printf("Choice: ");
+
 //     while(getchar_timeout_us(0) != PICO_ERROR_TIMEOUT);
-    
-//     // Wait for user input with timeout
-//     absolute_time_t timeout = make_timeout_time_ms(10000); // 10 second timeout
-//     char choice = '3';
-    
-//     // while (absolute_time_diff_us(get_absolute_time(), timeout) > 0) {
-//     //     int ch = getchar_timeout_us(100000); // 100ms timeout
-//     //     if (ch != PICO_ERROR_TIMEOUT) {
-//     //         choice = (char)ch;
-//     //         break;
-//     //     }
-//     // }
-    
-//     if (choice == 0) {
-//         printf("\nNo input - starting normal mode\n");
-//         choice = '1';
+
+//     absolute_time_t timeout = make_timeout_time_ms(5000);
+//     char choice = '1';
+
+//     while (absolute_time_diff_us(get_absolute_time(), timeout) > 0) {
+//         int ch = getchar_timeout_us(100000);
+//         if (ch != PICO_ERROR_TIMEOUT) {
+//             choice = (char)ch;
+//             break;
+//         }
 //     }
-    
-//     printf("\nStarting mode: %c\n\n", choice);
-    
+
+//     printf("%c\n\n", choice);
+
 //     if (choice == '2') {
-//         printf("=== RAW MAGNETOMETER MODE ===\n");
-//         printf("Press any key to exit...\n");
-//         while (true) {
-//             print_raw_mag_calibration();
-//             sleep_ms(500);
-//             // Check for exit key
-//             if (getchar_timeout_us(0) != PICO_ERROR_TIMEOUT) break;
-//         }
-//     }
-//     else if (choice == '3') {
 //         simple_calibration();
-//         printf("\nCalibration complete! Copy the values above into your code.\n");
-//         printf("Press any key to exit...\n");
-//         //while (getchar_timeout_us(1000000) == PICO_ERROR_TIMEOUT);
+//         printf("\nPress any key to start...\n");
+//         while (getchar_timeout_us(1000000) == PICO_ERROR_TIMEOUT);
 //     }
-//     else {
-//         printf("=== NORMAL OPERATION MODE ===\n");
-//         printf("Press any key to change mode...\n");
-//         //simple_calibration();
-//         while (true) {
-//             int16_t ax, ay, az;
-//             if (read_accel_raw(&ax, &ay, &az)) {
-//                 compute_and_print_data(ax, ay, az);
-//             } else {
-//                 printf("Accelerometer read failed!\n");
-//             }
-            
-//             // Check for mode change
-//             // if (getchar_timeout_us(0) != PICO_ERROR_TIMEOUT) {
-//             //     printf("\n\nRestart to change mode.\n");
-//             //     break;
-//             // }
-            
-//             sleep_ms(100);
+
+//     printf("\n=== OPERATION ===\n");
+//     printf("0° = Initial orientation (North)\n");
+//     printf("Rotation: CW increases (0°→90°→180°→270°→360°)\n");
+//     printf("Press 'R' to reset reference\n");
+//     printf("Watch for [FAST↻] = Rapid rotation detected (instant response)\n");
+//     printf("Watch for [INT] = Magnetic interference (still responsive)\n\n");
+
+//     sleep_ms(1000);
+
+//     while (true) {
+//         int16_t ax, ay, az;
+//         if (read_accel_raw(&ax, &ay, &az)) {
+//             compute_and_print_data(ax, ay, az);
 //         }
+
+//         int ch = getchar_timeout_us(0);
+//         if (ch == 'r' || ch == 'R') {
+//             reset_heading_reference();
+//         }
+
+//         sleep_ms(100);
 //     }
-    
+
 //     return 0;
 // }

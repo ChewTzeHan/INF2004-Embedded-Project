@@ -40,6 +40,8 @@
 
 #include <time.h>
 
+#include "mqtt_client.h"
+
 // ==============================
 // GLOBAL VARIABLES - Sensor Data Storage
 // ==============================
@@ -193,6 +195,29 @@ bool telemetry_callback(struct repeating_timer *t) {
     printf("ENC: E1=%ld E2=%ld\n", 
            (long)motor_data.encoder1_pulses, (long)motor_data.encoder2_pulses);
     printf("==================\n");
+
+    // ---- MQTT publish ----
+    if (mqtt_is_connected()) {
+        // rmb to replace 0.0f with real speed/distance
+        float speed_cm_s   = 0.0f;
+        float distance_cm  = 0.0f;
+        float yaw_deg      = imu_data.yaw;
+        float ultra_cm     = ultrasonic_data.distance_cm;
+        const char* state  = ultrasonic_data.object_present ? "obstacle" : "moving";
+        mqtt_publish_telemetry(speed_cm_s, distance_cm, yaw_deg, ultra_cm, state);
+    }
+    // if (mqtt_is_connected()) {
+    //     // rmb to replace 0.0f with real speed/distance
+    //     float speed_cm_s = 0.0f;
+    //     const char *state = ultrasonic_data.object_present ? "avoiding" : "moving";
+    //     mqtt_publish_telemetry(speed_cm_s,
+    //                            ultrasonic_data.distance_cm,
+    //                            imu_data.yaw,
+    //                            ultrasonic_data.distance_cm,   // ultra_cm field
+    //                            state);
+    // }
+    // ------------------------------------------------
+
     return true; // Continue repeating
 }
 
@@ -349,14 +374,26 @@ void initialize_sensors(void) {
 
 void main_task(__unused void *params) {
     printf("Main task started - initializing system...\n");
-    
-    if (cyw43_arch_init()) {
-        printf("Failed to initialize WiFi hardware\n");
+
+    printf("=== Pico SDK Timer-Based Robot Control ===\n");
+
+    // Start Wi-Fi and MQTT (uses your WIFI_SSID/WIFI_PASSWORD and broker IP)
+    if (!wifi_and_mqtt_start()) {
+        printf("Network/MQTT start failed\n");
         vTaskDelete(NULL);
         return;
     }
+
+// void main_task(__unused void *params) {
+//     printf("Main task started - initializing system...\n");
     
-    printf("=== Pico SDK Timer-Based Robot Control ===\n");
+//     if (cyw43_arch_init()) {
+//         printf("Failed to initialize WiFi hardware\n");
+//         vTaskDelete(NULL);
+//         return;
+//     }
+    
+//     printf("=== Pico SDK Timer-Based Robot Control ===\n");
     
     // Initialize everything
     initialize_sensors();
