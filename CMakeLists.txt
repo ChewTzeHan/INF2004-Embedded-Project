@@ -23,12 +23,15 @@ if (EXISTS ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c)
                 # WIFI_PASSWORD=\"${WIFI_PASSWORD}\"
                 WIFI_SSID="Galaxy S20 FE 5GD3A6"
                 WIFI_PASSWORD="xqag4139"
+                # WIFI_SSID="Starhub_0060"
+                # WIFI_PASSWORD="fYKERJqzG2"
                 NO_SYS=0                    # Using FreeRTOS with sockets
                 #LWIP_SOCKET=1               # Enable socket API
                 #PING_USE_SOCKETS=1          # Use sockets for ping
                 PICO_MAX_SHARED_IRQ_HANDLERS=8
 
                 BROKER_IP="192.168.63.104"        # <-- put YOUR broker IP here
+                # BROKER_IP="192.168.0.7"
                 BASE_TOPIC="robot/alpha"            # <-- or your preferred base
                 MQTT_PORT=1883
                 MQTT_CLIENT_ID="pico-car"

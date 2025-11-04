@@ -22,14 +22,32 @@ void ir_digital_init(void) {
 uint16_t ir_read_raw(void) {
     (void)adc_read();
     sleep_us(5);
-    const int N = 8;
+    const int N = 12;
     uint32_t acc = 0;
     for (int i = 0; i < N; i++) {
         acc += adc_read();
         sleep_us(5);
     }
+    
     return (uint16_t)(acc / N);
 }
+
+// uint16_t ir_read_raw(void) {
+//     (void)adc_read();
+//     sleep_us(5);
+//     const int N = 8;
+//     uint16_t max_value = 0;
+    
+//     for (int i = 0; i < N; i++) {
+//         uint16_t current_read = adc_read();
+//         if (current_read > max_value) {
+//             max_value = current_read;
+//         }
+//         sleep_us(5);
+//     }
+    
+//     return max_value;
+// }
 
 bool ir_read_digital(void) {
     return gpio_get(RIGHT_IR_DIGITAL_PIN);

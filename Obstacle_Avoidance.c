@@ -802,22 +802,22 @@ static void robot_task(void *pv) {
     vTaskDelete(NULL);                       // never reached, but good practice
 }
 
-int main(void) {
-    stdio_init_all();
+// int main(void) {
+//     stdio_init_all();
 
-    // Create the robot task (stack size can be tuned; 4096 words is a safe start)
-    xTaskCreate(
-        robot_task, 
-        "robot",
-        4096,                  // stack words (increase if needed)
-        NULL,
-        tskIDLE_PRIORITY + 2,  // priority
-        NULL
-    );
+//     // Create the robot task (stack size can be tuned; 4096 words is a safe start)
+//     xTaskCreate(
+//         robot_task, 
+//         "robot",
+//         4096,                  // stack words (increase if needed)
+//         NULL,
+//         tskIDLE_PRIORITY + 2,  // priority
+//         NULL
+//     );
 
-    // Start FreeRTOS
-    vTaskStartScheduler();
+//     // Start FreeRTOS
+//     vTaskStartScheduler();
 
-    // Should never return
-    while (1) { /* idle */ }
-}
+//     // Should never return
+//     while (1) { /* idle */ }
+// }

@@ -24,7 +24,7 @@ typedef struct {
 
 static mag_calibration_t mag_cal = {
     .offset_x = 10.0f, 
-    .offset_y = -126.0f, 
+    .offset_y = -132.0f, 
     .offset_z = -200.0f,
     .scale_x = 341.2f, 
     .scale_y = 341.2f, 
@@ -35,14 +35,14 @@ static mag_calibration_t mag_cal = {
 #define ACCEL_ALPHA  0.05f
 #define JERK_THRESHOLD   120.0f
 
-// ========== Magnetometer Filter Parameters ==========
-#define MAG_FILTER_SIZE 5  // REDUCED from 10 for faster response
+// ========== OPTIMIZED Magnetometer Filter Parameters ==========
+#define MAG_FILTER_SIZE 3  // REDUCED to 3 for minimal lag
 #define BASELINE_MAG_STRENGTH 1.36f
 #define STRENGTH_TOLERANCE 0.3f
 
-// ========== NEW: Motion Detection Parameters ==========
-#define ANGULAR_VELOCITY_THRESHOLD 3.0f  // degrees per sample to detect rotation
-#define STATIONARY_THRESHOLD 1.0f        // degrees per sample for stationary
+// ========== Motion Detection (TUNED) ==========
+#define ANGULAR_VELOCITY_THRESHOLD 5.0f   // Increased - faster rotation detection
+#define STATIONARY_THRESHOLD 0.5f         // Tighter stationary detection
 
 // ========== Globals ==========
 static int filter_index = 0;
@@ -53,18 +53,18 @@ static float last_total_accel = 0;
 static float pitch_filtered = 0.0f;
 static float roll_filtered  = 0.0f;
 
-// Magnetometer filtering - REDUCED SIZE
+// Magnetometer filtering - MINIMAL SIZE
 static float mx_history[MAG_FILTER_SIZE] = {0};
 static float my_history[MAG_FILTER_SIZE] = {0};
 static int mag_filter_idx = 0;
-static int mag_samples_count = 0;  // Track warmup
+static int mag_samples_count = 0;
 
 // Heading tracking
 static float heading_filtered = 0.0f;
 static float heading_reference = 0.0f;
 static bool heading_initialized = false;
 static float last_valid_heading = 0.0f;
-static float last_raw_heading = 0.0f;  // NEW: For velocity calculation
+static float last_raw_heading = 0.0f;
 
 // ========== Angle utilities ==========
 float normalize_angle(float angle) {
@@ -82,10 +82,10 @@ float angle_difference(float a, float b) {
 
 // ========== I2C Initialization ==========
 void imu_init() {
-    //stdio_init_all();
+    stdio_init_all();
     sleep_ms(100);
 
-    i2c_init(I2C_INST, 100000);
+    i2c_init(I2C_INST, 400000);  // INCREASED to 400kHz for faster reads
     gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL_PIN, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SDA_PIN);
@@ -99,7 +99,7 @@ void imu_init() {
     uint8_t mag_config[] = {0x02, 0x00};
     i2c_write_blocking(I2C_INST, MAG_ADDR, mag_config, 2, false);
 
-    printf("IMU Ready\n\n");
+    printf("IMU Ready (400kHz I2C)\n\n");
 }
 
 // ========== Sensor Reading ==========
@@ -138,15 +138,16 @@ int16_t apply_filter(int16_t raw_value, int16_t history[], int *index) {
     return (int16_t)(sum / FILTER_SIZE);
 }
 
-void sort_float_array(float *arr, int size) {
-    for (int i = 0; i < size - 1; i++) {
-        for (int j = 0; j < size - i - 1; j++) {
-            if (arr[j] > arr[j + 1]) {
-                float temp = arr[j];
-                arr[j] = arr[j + 1];
-                arr[j + 1] = temp;
-            }
-        }
+// SIMPLE MEDIAN for small arrays
+float median_3(float a, float b, float c) {
+    if (a > b) {
+        if (b > c) return b;      // a > b > c
+        else if (a > c) return c; // a > c > b
+        else return a;            // c > a > b
+    } else {
+        if (a > c) return a;      // b > a > c
+        else if (b > c) return c; // b > c > a
+        else return b;            // c > b > a
     }
 }
 
@@ -187,7 +188,7 @@ void calculate_orientation(int16_t ax, int16_t ay, int16_t az, float *pitch, flo
     *roll  = roll_filtered;
 }
 
-// ========== FAST RESPONSE HEADING with Motion-Adaptive Filtering ==========
+// ========== ULTRA-FAST HEADING with Aggressive Motion Detection ==========
 float get_heading_fast(float *direction_str) {
     int16_t mx_raw, my_raw, mz_raw;
     if (!read_mag_raw(&mx_raw, &my_raw, &mz_raw)) {
@@ -198,24 +199,23 @@ float get_heading_fast(float *direction_str) {
     float mx = (mx_raw - mag_cal.offset_x) / mag_cal.scale_x;
     float my = (my_raw - mag_cal.offset_y) / mag_cal.scale_y;
 
-    // === LIGHTWEIGHT MEDIAN FILTER (smaller window) ===
+    // === MINIMAL 3-SAMPLE MEDIAN FILTER ===
     mx_history[mag_filter_idx] = mx;
     my_history[mag_filter_idx] = my;
     mag_filter_idx = (mag_filter_idx + 1) % MAG_FILTER_SIZE;
     mag_samples_count = (mag_samples_count < MAG_FILTER_SIZE) ? mag_samples_count + 1 : MAG_FILTER_SIZE;
     
-    // Only use available samples during warmup
-    int samples_to_use = mag_samples_count;
+    float mx_median, my_median;
     
-    float mx_sorted[MAG_FILTER_SIZE];
-    memcpy(mx_sorted, mx_history, samples_to_use * sizeof(float));
-    sort_float_array(mx_sorted, samples_to_use);
-    float mx_median = mx_sorted[samples_to_use / 2];
-    
-    float my_sorted[MAG_FILTER_SIZE];
-    memcpy(my_sorted, my_history, samples_to_use * sizeof(float));
-    sort_float_array(my_sorted, samples_to_use);
-    float my_median = my_sorted[samples_to_use / 2];
+    if (mag_samples_count < 3) {
+        // During warmup, use raw values
+        mx_median = mx;
+        my_median = my;
+    } else {
+        // Fast 3-value median
+        mx_median = median_3(mx_history[0], mx_history[1], mx_history[2]);
+        my_median = median_3(my_history[0], my_history[1], my_history[2]);
+    }
 
     // === MAGNETIC FIELD STRENGTH CHECK ===
     float mag_strength = sqrtf(mx_median * mx_median + my_median * my_median);
@@ -240,31 +240,28 @@ float get_heading_fast(float *direction_str) {
     float relative_heading = angle_difference(heading_raw, heading_reference);
     relative_heading = normalize_angle(relative_heading);
 
-    // === MOTION-ADAPTIVE FILTERING (Key optimization!) ===
+    // === AGGRESSIVE MOTION-ADAPTIVE FILTERING ===
     float angular_velocity = fabsf(angle_difference(heading_raw, last_raw_heading));
     last_raw_heading = heading_raw;
     
     float alpha;
-    
-    if (has_interference) {
-        // During interference, still responsive but more cautious
-        if (angular_velocity > ANGULAR_VELOCITY_THRESHOLD) {
-            alpha = 0.4f;  // FAST even during interference if rotating
-            printf("[INT+ROT:%.2f] ", mag_strength);
-        } else {
-            alpha = 0.1f;  // Slower when stationary with interference
-            printf("[INT:%.2f] ", mag_strength);
-        }
+
+    if (angular_velocity > ANGULAR_VELOCITY_THRESHOLD) {
+        alpha = has_interference ? 0.4f : 0.9f;
+        printf("[FAST] ");
+        
+    } else if (angular_velocity > STATIONARY_THRESHOLD) {
+        alpha = has_interference ? 0.1f : 0.3f;
+        printf("[MED] ");
+        
     } else {
-        // Clean signal - use velocity-based adaptation
-        if (angular_velocity > ANGULAR_VELOCITY_THRESHOLD) {
-            alpha = 0.7f;  // VERY FAST during rotation
-            printf("[FAST↻] ");
-        } else if (angular_velocity > STATIONARY_THRESHOLD) {
-            alpha = 0.4f;  // Medium speed for slow rotation
-        } else {
-            alpha = 0.2f;  // Slower when stationary for stability
-        }
+        alpha = has_interference ? 0.01f : 0.02f;
+        // Don't print anything when stationary
+    }
+
+    // Only show interference warning occasionally
+    if (has_interference) {
+        printf("[UNSTABLE] Mag=%.2f", mag_strength);  // Just a warning symbol
     }
     
     // Apply exponential filter with adaptive alpha
@@ -289,7 +286,7 @@ float get_heading_fast(float *direction_str) {
 
 void reset_heading_reference() {
     heading_initialized = false;
-    mag_samples_count = 0;  // Reset filter warmup
+    mag_samples_count = 0;
     printf("\n[RESET] Heading reference reset\n");
 }
 
@@ -302,7 +299,6 @@ void compute_and_print_data(int16_t ax, int16_t ay, int16_t az) {
     float pitch, roll;
     calculate_orientation(ax_filtered, ay_filtered, az_filtered, &pitch, &roll);
 
-    // Use fast heading function
     float direction = 0.0f;
     float heading = get_heading_fast(&direction);
 
@@ -390,14 +386,14 @@ void simple_calibration() {
            mag_cal.scale_x, mag_cal.scale_y, mag_cal.scale_z);
 }
 
-// ========== Main ==========
+// // ========== Main ==========
 // int main(void) {
 //     stdio_init_all();
 //     imu_init();
 //     sleep_ms(2000);
 
-//     printf("\n=== IMU HEADING TRACKER (FAST RESPONSE) ===\n");
-//     printf("Features: Motion-adaptive filtering for instant response\n");
+//     printf("\n=== ULTRA-FAST IMU HEADING TRACKER ===\n");
+//     printf("Features: 0.9 alpha during fast rotation = nearly instant response\n");
 //     printf("1 - Normal operation\n");
 //     printf("2 - Calibrate magnetometer\n");
 //     printf("Choice: ");
@@ -427,8 +423,8 @@ void simple_calibration() {
 //     printf("0° = Initial orientation (North)\n");
 //     printf("Rotation: CW increases (0°→90°→180°→270°→360°)\n");
 //     printf("Press 'R' to reset reference\n");
-//     printf("Watch for [FAST↻] = Rapid rotation detected (instant response)\n");
-//     printf("Watch for [INT] = Magnetic interference (still responsive)\n\n");
+//     printf("Watch for [INSTANT↻] = Ultra-fast tracking (alpha=0.9)\n");
+//     printf("Watch for [STABLE] = Stationary mode (heavy filtering)\n\n");
 
 //     sleep_ms(1000);
 
@@ -443,7 +439,7 @@ void simple_calibration() {
 //             reset_heading_reference();
 //         }
 
-//         sleep_ms(100);
+//         sleep_ms(50);  // REDUCED from 100ms - doubles your sample rate!
 //     }
 
 //     return 0;

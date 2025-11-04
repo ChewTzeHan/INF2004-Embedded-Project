@@ -9,6 +9,7 @@
 #include "imu_raw_demo.h"  // Reuse existing IMU functions
 #include "mqtt_client.h"   // Include MQTT header
 #include "motor_encoder_demo.h" // For drive_signed
+#include "encoder.h"       // For speed calculation
 
 // Global variables for filtering
 #define FILTER_SIZE 10
@@ -17,9 +18,7 @@ static int16_t ax_history[FILTER_SIZE] = {0};
 static int16_t ay_history[FILTER_SIZE] = {0};
 static int16_t az_history[FILTER_SIZE] = {0};
 
-// Global PID configuration and state
 // Global PID configuration and state - UPDATED FOR STABILITY
-// Global PID configuration and state - INCREASED AUTHORITY
 static pid_config_t pid_config = {
     .kp = 0.38f,          // Increased from 0.08f - stronger correction
     .ki = 0.005f,         // Increased from 0.001f - some integral help
@@ -37,17 +36,97 @@ static pid_state_t pid_state = {
     .enabled = false
 };
 
-// MQTT telemetry publishing variables (same pattern as obstacle avoidance)
-static volatile uint32_t g_last_pub_ms = 0;
-static const uint32_t MQTT_PUBLISH_INTERVAL_MS = 500; // Publish every 500ms
-
 // ==============================
-// STATIC HELPER FUNCTIONS
+// SPEED CALCULATION VARIABLES (Same pattern as obstacle avoidance)
 // ==============================
 
-/**
- * @brief Apply simple moving average filter to raw sensor data
- */
+static volatile uint32_t g_imu_last_speed_calc_time = 0;
+static volatile float g_imu_current_speed_cm_s = 0.0f;
+static volatile float g_imu_total_distance_cm = 0.0f;
+static volatile float g_imu_last_distance_cm = 0.0f;
+static volatile uint32_t g_imu_last_pub_ms = 0;
+
+// ==============================
+// SPEED CALCULATION FUNCTIONS (Same pattern as obstacle avoidance)
+// ==============================
+
+void imu_speed_calc_init(void) {
+    // Use the same interrupt-based encoder system as obstacle avoidance
+    encoders_init(true);  // Initialize encoders with pull-up
+    
+    g_imu_last_speed_calc_time = to_ms_since_boot(get_absolute_time());
+    g_imu_current_speed_cm_s = 0.0f;
+    g_imu_total_distance_cm = 0.0f;
+    g_imu_last_distance_cm = 0.0f;
+    printf("[IMU_SPEED_CALC] Initialized with interrupt-based encoders\n");
+}
+
+void imu_update_speed_and_distance(void) {
+    uint32_t current_time = to_ms_since_boot(get_absolute_time());
+    uint32_t time_elapsed_ms = current_time - g_imu_last_speed_calc_time;
+    
+    if (time_elapsed_ms < 100) return; // Wait for at least 100ms for meaningful speed calculation
+    
+    // Get current distance using interrupt-based functions
+    float left_distance = encoder_get_distance_cm(ENCODER_LEFT_GPIO);
+    float right_distance = encoder_get_distance_cm(ENCODER_RIGHT_GPIO);
+    float current_distance = (left_distance + right_distance) / 2.0f;
+    
+    // Calculate distance traveled since last measurement
+    float distance_traveled = current_distance - g_imu_last_distance_cm;
+    
+    // Calculate speed (cm/s) = distance (cm) / time (s)
+    float time_elapsed_s = time_elapsed_ms / 1000.0f;
+    
+    if (time_elapsed_s > 0.0f) {
+        g_imu_current_speed_cm_s = distance_traveled / time_elapsed_s;
+        
+        // Add sanity checks for reasonable speed values
+        if (g_imu_current_speed_cm_s < 0) {
+            g_imu_current_speed_cm_s = 0.0f; // No negative speeds
+        }
+        if (g_imu_current_speed_cm_s > 200.0f) { // Max reasonable speed for small robot
+            g_imu_current_speed_cm_s = 200.0f;
+        }
+    } else {
+        g_imu_current_speed_cm_s = 0.0f;
+    }
+    
+    // Update total distance
+    g_imu_total_distance_cm = current_distance;
+    
+    // Debug output (optional - can be commented out)
+    printf("[IMU_SPEED] dist_traveled=%.2fcm, time=%.3fs, speed=%.2fcm/s\n", 
+           distance_traveled, time_elapsed_s, g_imu_current_speed_cm_s);
+    
+    // Update for next calculation
+    g_imu_last_distance_cm = current_distance;
+    g_imu_last_speed_calc_time = current_time;
+}
+
+float imu_get_current_speed_cm_s(void) {
+    return g_imu_current_speed_cm_s;
+}
+
+float imu_get_total_distance_cm(void) {
+    // Use the interrupt-based distance calculation
+    float left_distance = encoder_get_distance_cm(ENCODER_LEFT_GPIO);
+    float right_distance = encoder_get_distance_cm(ENCODER_RIGHT_GPIO);
+    return (left_distance + right_distance) / 2.0f;
+}
+
+void imu_reset_total_distance(void) {
+    // Use the interrupt-based reset function
+    encoder_reset_distance(ENCODER_LEFT_GPIO);
+    encoder_reset_distance(ENCODER_RIGHT_GPIO);
+    g_imu_total_distance_cm = 0.0f;
+    printf("[IMU_SPEED_CALC] Total distance reset\n");
+}
+
+// ==============================
+// STATIC HELPER FUNCTIONS (unchanged)
+// ==============================
+
 static int16_t apply_filter(int16_t raw_value, int16_t history[], int *index) {
     history[*index] = raw_value;
     *index = (*index + 1) % FILTER_SIZE;
@@ -59,18 +138,11 @@ static int16_t apply_filter(int16_t raw_value, int16_t history[], int *index) {
     return (int16_t)(sum / FILTER_SIZE);
 }
 
-/**
- * @brief Calculate orientation angles from accelerometer data
- */
 static void calculate_orientation(int16_t ax, int16_t ay, int16_t az, float *pitch, float *roll) {
-    // Convert raw accelerometer data to orientation angles
     *pitch = atan2f(-ax, sqrtf(ay*ay + az*az)) * 180.0f / (float)M_PI;
     *roll = atan2f(ay, az) * 180.0f / (float)M_PI;
 }
 
-/**
- * @brief Calculate yaw angle from magnetometer data with tilt compensation
- */
 static float calculate_yaw(int16_t mx, int16_t my, int16_t mz, float pitch_deg, float roll_deg) {
     float pitch = pitch_deg * M_PI / 180.0f;
     float roll  = roll_deg  * M_PI / 180.0f;
@@ -85,18 +157,12 @@ static float calculate_yaw(int16_t mx, int16_t my, int16_t mz, float pitch_deg, 
     return yaw;
 }
 
-/**
- * @brief Normalize angle to 0-360 degree range
- */
 static float normalize_angle(float angle) {
     while (angle < 0) angle += 360.0f;
     while (angle >= 360.0f) angle -= 360.0f;
     return angle;
 }
 
-/**
- * @brief Calculate shortest path error between two angles (handles 0/360 wrap-around)
- */
 static float calculate_angle_error(float current_angle, float target_angle) {
     float error = target_angle - current_angle;
     
@@ -110,22 +176,20 @@ static float calculate_angle_error(float current_angle, float target_angle) {
     return error;
 }
 
-/**
- * @brief Publish IMU telemetry data via MQTT with PID values
- */
-/**
- * @brief Publish IMU telemetry data via MQTT with PID values and setpoint
- */
+// ==============================
+// TELEMETRY PUBLISHING FUNCTION (Updated with speed/distance)
+// ==============================
+
 static void publish_imu_telemetry(const imu_data_t *data, float error, float pid_output, float left_speed, float right_speed) {
     if (!mqtt_is_connected()) {
         return;
     }
 
-    // Use yaw as heading, set other values to 0 as requested
-    float speed = 0.0f;           // Not used
-    float distance_cm = 0.0f;     // Not used
-    float yaw_deg = data->yaw;    // Current yaw angle
-    float ultra_cm = 0.0f;        // Not used
+    // Get speed and distance using the same pattern as obstacle avoidance
+    float speed = imu_get_current_speed_cm_s();     // Current speed in cm/s
+    float distance_cm = imu_get_total_distance_cm(); // Total distance traveled
+    float yaw_deg = data->yaw;                      // Current yaw angle
+    float ultra_cm = 0.0f;                          // Not used in IMU mode
     
     // Create state string with PID values AND SETPOINT
     char state[128];
@@ -137,14 +201,15 @@ static void publish_imu_telemetry(const imu_data_t *data, float error, float pid
                  pid_config.setpoint, error, pid_output, left_speed, right_speed);
     }
     
-    // Publish telemetry via MQTT
+    // Publish telemetry via MQTT (same function call as obstacle avoidance)
     mqtt_publish_telemetry(speed, distance_cm, yaw_deg, ultra_cm, state);
     
-    printf("[MQTT] Published IMU telemetry - Yaw: %.1f°, State: %s\n", yaw_deg, state);
+    printf("[IMU_MQTT] Published - Speed: %.2f cm/s, Distance: %.2f cm, Yaw: %.1f°, State: %s\n", 
+           speed, distance_cm, yaw_deg, state);
 }
 
 // ==============================
-// INITIALIZATION FUNCTIONS
+// INITIALIZATION FUNCTIONS (Updated with speed init)
 // ==============================
 
 void imu_movement_init(void) {
@@ -153,16 +218,20 @@ void imu_movement_init(void) {
     // Initialize the existing IMU system
     imu_init();
     
+    // Initialize speed calculation system
+    imu_speed_calc_init();
+    
     printf("IMU Movement System Ready\n");
     printf("• Reading pitch, roll, yaw from accelerometer and magnetometer\n");
     printf("• Using same I2C configuration as existing IMU system\n");
     printf("• Data filtering applied for stable readings\n");
     printf("• PID control using YAW angle for heading control\n");
-    printf("• MQTT telemetry publishing enabled for yaw/heading and PID data\n\n");
+    printf("• Speed and distance tracking via encoders\n");
+    printf("• MQTT telemetry publishing enabled for yaw/heading, PID data, speed and distance\n\n");
 }
 
 // ==============================
-// MAIN IMU READING FUNCTION
+// MAIN IMU READING FUNCTION (unchanged)
 // ==============================
 
 bool read_imu_data(imu_data_t *data) {
@@ -219,7 +288,7 @@ bool read_imu_data(imu_data_t *data) {
 }
 
 // ==============================
-// DATA PRINTING FUNCTION
+// DATA PRINTING FUNCTION (unchanged)
 // ==============================
 
 void print_imu_data(const imu_data_t *data) {
@@ -243,7 +312,7 @@ void print_imu_data(const imu_data_t *data) {
 }
 
 // ==============================
-// PID CONTROLLER FUNCTIONS
+// PID CONTROLLER FUNCTIONS (unchanged)
 // ==============================
 
 void pid_controller_init(pid_config_t *config, pid_state_t *state) {
@@ -265,6 +334,7 @@ void pid_controller_init(pid_config_t *config, pid_state_t *state) {
            config->setpoint, config->base_speed_left, config->base_speed_right, config->max_output);
     printf("Using YAW angle for heading control\n");
 }
+
 float progressive_pid_controller_update(float current_yaw, pid_config_t *config, pid_state_t *state) {
     if (!state->enabled || config == NULL) {
         return 0.0f;
@@ -364,7 +434,6 @@ float pid_controller_update(float current_yaw, pid_config_t *config, pid_state_t
 void drive_to_yaw_setpoint(float current_yaw, pid_config_t *config, pid_state_t *state, float *pid_output, float *left_speed, float *right_speed) {
     if (!state->enabled) {
         // Stop motors if PID is disabled
-        // drive_signed(0.0f, 0.0f);
         *pid_output = 0.0f;
         *left_speed = 0.0f;
         *right_speed = 0.0f;
@@ -388,11 +457,10 @@ void drive_to_yaw_setpoint(float current_yaw, pid_config_t *config, pid_state_t 
     // Apply motor control
     printf("THE SPEEDS ARRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRE: L=%.1f R=%.1f\n", *left_speed, *right_speed);
     drive_signed(*left_speed, *right_speed);
-    //drive_signed(30.0f*1.25, 30.0f); // TEMPORARY OVERRIDE FOR TESTING
 }
 
 // ==============================
-// GETTER FUNCTIONS FOR PID CONFIG
+// GETTER FUNCTIONS FOR PID CONFIG (unchanged)
 // ==============================
 
 pid_config_t* get_pid_config(void) {
@@ -404,14 +472,9 @@ pid_state_t* get_pid_state(void) {
 }
 
 // ==============================
-// AUTO-SETPOINT DETECTION FUNCTION
+// AUTO-SETPOINT DETECTION FUNCTION (unchanged)
 // ==============================
 
-/**
- * @brief Detect and set the initial yaw value as setpoint
- * @param samples Number of samples to average for initial reading
- * @return true if successful, false if detection failed
- */
 bool detect_initial_setpoint(int samples) {
     printf("Detecting initial heading (yaw)...\n");
     printf("Please keep the robot stationary for %d samples...\n", samples);
@@ -446,20 +509,16 @@ bool detect_initial_setpoint(int samples) {
 }
 
 // ==============================
-// SET YAW SETPOINT FUNCTION
+// SET YAW SETPOINT FUNCTION (unchanged)
 // ==============================
 
-/**
- * @brief Set a specific yaw angle as the target setpoint
- * @param target_yaw The desired yaw angle in degrees (0-360)
- */
 void set_yaw_setpoint(float target_yaw) {
     pid_config.setpoint = normalize_angle(target_yaw);
     printf("Yaw setpoint updated to: %.1f°\n", pid_config.setpoint);
 }
 
 // ==============================
-// FREE RTOS TASK FUNCTION
+// FREE RTOS TASK FUNCTION (Updated with speed calculation)
 // ==============================
 
 void imu_movement_task(__unused void *params) {
@@ -470,7 +529,7 @@ void imu_movement_task(__unused void *params) {
     
     imu_data_t current_data;
     uint32_t last_print_time = 0;
-    const uint32_t print_interval_ms = 30; // Print every 500ms
+    const uint32_t print_interval_ms = 30; // Print every 30ms
     
     while (true) {
         uint32_t current_time = to_ms_since_boot(get_absolute_time());
@@ -484,16 +543,23 @@ void imu_movement_task(__unused void *params) {
             
             float error = calculate_angle_error(current_data.yaw, pid_config.setpoint);
             
-            // Publish MQTT telemetry at regular intervals with PID values
-            if (mqtt_is_connected() && (current_time - g_last_pub_ms >= MQTT_PUBLISH_INTERVAL_MS)) {
-                g_last_pub_ms = current_time;
+            // Update speed and distance calculation (same pattern as obstacle avoidance)
+            imu_update_speed_and_distance();
+            
+            // Publish MQTT telemetry at regular intervals with PID values and speed/distance
+            if (mqtt_is_connected() && (current_time - g_imu_last_pub_ms >= 500)) {
+                g_imu_last_pub_ms = current_time;
                 publish_imu_telemetry(&current_data, error, pid_output, left_speed, right_speed);
             }
             
             // Print data at specified interval
             if (current_time - last_print_time >= print_interval_ms) {
-                printf("[IMU] Yaw: %.1f° | Setpoint: %.1f° | Error: %.1f° | PID: %.1f | L: %.1f | R: %.1f\n",
-                       current_data.yaw, pid_config.setpoint, error, pid_output, left_speed, right_speed);
+                float current_speed = imu_get_current_speed_cm_s();
+                float total_distance = imu_get_total_distance_cm();
+                
+                printf("[IMU] Yaw: %.1f° | Setpoint: %.1f° | Error: %.1f° | PID: %.1f | L: %.1f | R: %.1f | Speed: %.1f cm/s | Dist: %.1f cm\n",
+                       current_data.yaw, pid_config.setpoint, error, pid_output, left_speed, right_speed, 
+                       current_speed, total_distance);
                 last_print_time = current_time;
             }
         } else {
@@ -509,7 +575,7 @@ void imu_movement_task(__unused void *params) {
 }
 
 // ==============================
-// STANDALONE TEST MAIN FUNCTION
+// STANDALONE TEST MAIN FUNCTION (Updated with speed init)
 // ==============================
 
 static void imu_robot_task(void *pv) {
@@ -522,7 +588,8 @@ static void imu_robot_task(void *pv) {
     if (!wifi_and_mqtt_start()) {
         printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
     }
-    // Initialize the IMU movement system
+    
+    // Initialize the IMU movement system (includes speed calculation)
     imu_movement_init();
     
     // Initialize motors
@@ -532,19 +599,21 @@ static void imu_robot_task(void *pv) {
     printf("\n=== Auto-Setpoint Detection ===\n");
     if (!detect_initial_setpoint(10)) { // Take 10 samples for averaging
         printf("Falling back to manual setpoint: 0.0°\n");
-        pid_config.setpoint = 0.0f; // Fallback value
+        pid_config.setpoint = 140.0f; // Fallback value
     }
     
     // Initialize PID controller with detected setpoint
     pid_controller_init(NULL, NULL);
     
     printf("\nStarting IMU data reading loop with PID control and MQTT telemetry...\n");
-    printf("Format: Yaw: [angle]° | Setpoint: [angle]° | Error: [error]° | PID: [output] | L: [left_speed] | R: [right_speed]\n\n");
+    printf("Format: Yaw: [angle]° | Setpoint: [angle]° | Error: [error]° | PID: [output] | L: [left_speed] | R: [right_speed] | Speed: [speed] cm/s | Dist: [distance] cm\n\n");
     
     imu_data_t imu_data;
     uint32_t last_print_time = 0;
     uint32_t last_pid_time = 0;
+    uint32_t last_speed_update_time = 0;
     const uint32_t pid_interval_ms = 50; // 20Hz PID control
+    const uint32_t speed_update_interval_ms = 100; // 10Hz speed update
     
     while (true) {
         uint32_t current_time = to_ms_since_boot(get_absolute_time());
@@ -560,22 +629,32 @@ static void imu_robot_task(void *pv) {
                 last_pid_time = current_time;
             }
             
-            // Publish MQTT telemetry with PID values
-            if (mqtt_is_connected() && (current_time - g_last_pub_ms >= MQTT_PUBLISH_INTERVAL_MS)) {
-                g_last_pub_ms = current_time;
+            // Update speed calculation at moderate frequency (10Hz)
+            if (current_time - last_speed_update_time >= speed_update_interval_ms) {
+                imu_update_speed_and_distance();
+                last_speed_update_time = current_time;
+            }
+            
+            // Publish MQTT telemetry with PID values and speed/distance
+            if (mqtt_is_connected() && (current_time - g_imu_last_pub_ms >= 500)) {
+                g_imu_last_pub_ms = current_time;
                 publish_imu_telemetry(&imu_data, error, pid_output, left_speed, right_speed);
             }
             
-            // Print data every 500ms with PID information
+            // Print data every 500ms with comprehensive information
             if (current_time - last_print_time >= 500) {
-                printf("Yaw: %6.1f° | Setpoint: %6.1f° | Error: %6.1f° | PID: %6.1f | L: %6.1f | R: %6.1f\n",
-                       imu_data.yaw, pid_config.setpoint, error, pid_output, left_speed, right_speed);
+                float current_speed = imu_get_current_speed_cm_s();
+                float total_distance = imu_get_total_distance_cm();
+                
+                printf("Yaw: %6.1f° | Setpoint: %6.1f° | Error: %6.1f° | PID: %6.1f | L: %6.1f | R: %6.1f | Speed: %6.1f cm/s | Dist: %6.1f cm\n",
+                       imu_data.yaw, pid_config.setpoint, error, pid_output, left_speed, right_speed, 
+                       current_speed, total_distance);
                 last_print_time = current_time;
-                 pid_config.setpoint += 0.4f;
+                //pid_config.setpoint += 0.4f; // Increment setpoint for testing
             }
         } else {
             printf("[ERROR] Failed to read IMU data - Stopping motors\n");
-            // drive_signed(0.0f, 0.0f); // Stop motors on sensor failure
+            // Stop motors on sensor failure
         }
         
         // Handle MQTT polling (same as obstacle avoidance)
@@ -594,11 +673,11 @@ static void imu_robot_task(void *pv) {
 //     // Wait for serial connection to be established
 //     sleep_ms(4000);
 
-//     // Create the IMU robot task (stack size can be tuned; 4096 words is a safe start)
+//     // Create the IMU robot task
 //     xTaskCreate(
 //         imu_robot_task, 
 //         "imu_robot",
-//         4096,                  // stack words (increase if needed)
+//         4096,                  // stack words
 //         NULL,
 //         tskIDLE_PRIORITY + 2,  // priority
 //         NULL
