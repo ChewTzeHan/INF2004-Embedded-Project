@@ -15,6 +15,7 @@
 #include "motor_encoder_demo.h"
 #include "PID_Line_Follow.h"
 #include "mqtt_client.h"
+#include "encoder.h"
 
 // ===================== Code 39 table (with Mod 43 values) =====================
 typedef struct {
@@ -93,7 +94,7 @@ void barcode_init(void) {
     ir_digital_init();
     
     // Setup interrupt-based capture
-    barcode_irq_init();
+    //barcode_irq_init();
     
     printf("Barcode: Digital IR sensor initialized on GPIO%d\n", RIGHT_IR_DIGITAL_PIN);
 }
@@ -169,8 +170,8 @@ static width_t classify_width(uint32_t dur_us, uint32_t narrow_us) {
     
     // More lenient thresholds for Code39
     if (ratio < 0.3f) return WIDTH_BAD;      // Too short
-    if (ratio < 2.0f) return WIDTH_NARROW;   // 0.3x to 2.0x = Narrow
-    if (ratio < 5.0f) return WIDTH_WIDE;     // 2.0x to 5.0x = Wide
+    if (ratio < 2.3f) return WIDTH_NARROW;   // 0.3x to 2.0x = Narrow
+    if (ratio < 10.0f) return WIDTH_WIDE;     // 2.0x to 5.0x = Wide
     return WIDTH_BAD;                         // Too long
 }
 
@@ -720,7 +721,7 @@ static bool barcode_scan_while_moving(barcode_result_t *result, char *nw_pattern
 
     uint32_t capture_start_time = time_us_32();
     //const uint32_t MAX_CAPTURE_TIME_US = 1750000; // 1.75 second maximum (constant)
-    const uint32_t MAX_CAPTURE_TIME_US = 4000000; // 3 second maximum
+    const uint32_t MAX_CAPTURE_TIME_US = 5000000; // 3 second maximum
     // Capture transitions while continuing to run line following
     
 while (n < MAX_TRANSITIONS-1) {
@@ -751,7 +752,7 @@ while (n < MAX_TRANSITIONS-1) {
         }
     } else {
         uint32_t quiet_time = now - last_change;
-        if ((n > 15 && quiet_time > 1250000) || n > 30) { // 0.5 second quiet time
+        if ((n > 15 && quiet_time > 1000000) || n > 30) { // 1 second quiet time
             dur[n++] = now - seg_start;
             printf("Quiet period detected, ending capture. Total transitions: %d\n", n);
             all_stop(); // Stop movement after capture
@@ -837,18 +838,116 @@ while (n < MAX_TRANSITIONS-1) {
     return true; // Return true even though we're using default, so it gets processed
 }
 
+// ==============================
+// BUTTON SETUP AND WAIT FUNCTION
+// ==============================
+// ==============================
+// SPEED CALCULATION VARIABLES (Same pattern as IMU_movement.c)
+// ==============================
+
+static volatile uint32_t g_barcode_last_speed_calc_time = 0;
+static volatile float g_barcode_current_speed_cm_s = 0.0f;
+static volatile float g_barcode_total_distance_cm = 0.0f;
+static volatile float g_barcode_last_distance_cm = 0.0f;
+
+// ==============================
+// SPEED CALCULATION FUNCTIONS (Same pattern as IMU_movement.c)
+// ==============================
+
+
+void barcode_speed_calc_init(void) {
+    // Use the same interrupt-based encoder system as IMU_movement.c
+    encoders_init(true);  // Initialize encoders with pull-up
+    
+    g_barcode_last_speed_calc_time = to_ms_since_boot(get_absolute_time());
+    g_barcode_current_speed_cm_s = 0.0f;
+    g_barcode_total_distance_cm = 0.0f;
+    g_barcode_last_distance_cm = 0.0f;
+    printf("[BARCODE_SPEED_CALC] Initialized with interrupt-based encoders\n");
+}
+
+void barcode_update_speed_and_distance(void) {
+    uint32_t current_time = to_ms_since_boot(get_absolute_time());
+    uint32_t time_elapsed_ms = current_time - g_barcode_last_speed_calc_time;
+    
+    if (time_elapsed_ms < 100) return; // Wait for at least 100ms for meaningful speed calculation
+    
+    // Get current distance using interrupt-based functions
+    float left_distance = encoder_get_distance_cm(ENCODER_LEFT_GPIO);
+    float right_distance = encoder_get_distance_cm(ENCODER_RIGHT_GPIO);
+    float current_distance = (left_distance + right_distance) / 2.0f;
+    
+    // Calculate distance traveled since last measurement
+    float distance_traveled = current_distance - g_barcode_last_distance_cm;
+    
+    // Calculate speed (cm/s) = distance (cm) / time (s)
+    float time_elapsed_s = time_elapsed_ms / 1000.0f;
+    
+    if (time_elapsed_s > 0.0f) {
+        g_barcode_current_speed_cm_s = distance_traveled / time_elapsed_s;
+        
+        // Add sanity checks for reasonable speed values
+        if (g_barcode_current_speed_cm_s < 0) {
+            g_barcode_current_speed_cm_s = 0.0f; // No negative speeds
+        }
+        if (g_barcode_current_speed_cm_s > 200.0f) { // Max reasonable speed for small robot
+            g_barcode_current_speed_cm_s = 200.0f;
+        }
+    } else {
+        g_barcode_current_speed_cm_s = 0.0f;
+    }
+    
+    // Update total distance
+    g_barcode_total_distance_cm = current_distance;
+    
+    // Debug output (optional - can be commented out)
+    printf("[BARCODE_SPEED] dist_traveled=%.2fcm, time=%.3fs, speed=%.2fcm/s\n", 
+           distance_traveled, time_elapsed_s, g_barcode_current_speed_cm_s);
+    
+    // Update for next calculation
+    g_barcode_last_distance_cm = current_distance;
+    g_barcode_last_speed_calc_time = current_time;
+}
+
+float barcode_get_current_speed_cm_s(void) {
+    return g_barcode_current_speed_cm_s;
+}
+
+float barcode_get_total_distance_cm(void) {
+    // Use the interrupt-based distance calculation
+    float left_distance = encoder_get_distance_cm(ENCODER_LEFT_GPIO);
+    float right_distance = encoder_get_distance_cm(ENCODER_RIGHT_GPIO);
+    return (left_distance + right_distance) / 2.0f;
+}
+
+void barcode_reset_total_distance(void) {
+    // Use the interrupt-based reset function
+    encoder_reset_distance(ENCODER_LEFT_GPIO);
+    encoder_reset_distance(ENCODER_RIGHT_GPIO);
+    g_barcode_total_distance_cm = 0.0f;
+    printf("[BARCODE_SPEED_CALC] Total distance reset\n");
+}
+
+// float speed;
+// float distance;
+
+
 #define MAX_CONNECTION_ATTEMPTS 3
 
 static void barcode_detection_task(void *pv) {
-    printf("\n=== BARCODE DETECTION TASK STARTED ===\n");
-    printf("Behavior: Line follow while scanning barcodes with telemetry\n");
-    vTaskDelay(pdMS_TO_TICKS(100));
-    bool connected = false;
-    int attempts = 0;
+    setvbuf(stdout, NULL, _IONBF, 0);  // Make stdout non-blocking
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    // printf("\n=== BARCODE DETECTION TASK STARTED ===\n");
+    // printf("Behavior: Line follow while scanning barcodes with telemetry\n");
+    
+    // bool connected = false;
+    // int attempts = 0;
+    //init_start_button();
+    if (!wifi_and_mqtt_start()) {
+        printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
+    }
 
-    // if (!wifi_and_mqtt_start()) {
-    //     printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
-    // }
+    // wifi_and_mqtt_start_nonblocking();
 
     // if (!connected) {
     //     printf("[NET] Wi-Fi/MQTT start failed after %d attempts (continuing without MQTT)\n", 
@@ -857,28 +956,36 @@ static void barcode_detection_task(void *pv) {
     //     printf("[NET] Wi-Fi/MQTT connected successfully\n");
     // }
     
-    printf("[NET] Local IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
-    
+    // printf("[NET] Local IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
+    mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, "SYSTEM STARTING");
     sleep_ms(1000);
     
     // Initialize systems
     motor_encoder_init();
+
     ir_init(NULL);
+    printf("huh?\n");
     barcode_init();
+    barcode_speed_calc_init();
     
     printf("Starting line following with active barcode scanning and telemetry...\n");
-    
+    sleep_ms(2000);
     bool system_active = true;
     bool scanning_active = false;
     bool scan_complete = false;
     bool junction_complete = false;
     uint32_t scan_start_time = 0;
-    const uint32_t SCAN_TIMEOUT_MS = 8000; // 8 second timeout for scanning
+    const uint32_t SCAN_TIMEOUT_MS = 12000; // 8 second timeout for scanning
     static uint32_t g_last_pub_ms = 0;
     barcode_result_t scan_result;
+    mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, "SYSTEM READY");
+
+    // INSERT GPIO21 BUTTON HERE TO START
+    //wait_for_start_button();
     while (system_active) {
         // Check if we should start scanning (black detected)
         bool current_state = ir_read_digital();
+        barcode_update_speed_and_distance();
         if (current_state && !scanning_active && !junction_complete) { // Black detected and not already scanning
             if(scan_complete) {
                 printf("Scan already completed, ignoring further black detections.\n");
@@ -895,7 +1002,16 @@ static void barcode_detection_task(void *pv) {
                 // sleep_ms(500);
 
                 char decoded_letter = scan_result.data[0]; // Get the decoded letter
-    
+                
+
+                // Create a string with the decoded letter for MQTT
+                char state_msg[50];
+                snprintf(state_msg, sizeof(state_msg), "DECODED_LETTER: %c", decoded_letter);
+
+                // Publish the decoded letter via MQTT
+                float speed = barcode_get_current_speed_cm_s();
+                float distance = barcode_get_total_distance_cm();
+                mqtt_publish_telemetry(speed, distance, 0.0f, 0.0f, state_msg);
                 // Define RIGHT letters: A, C, E, G, I, K, M, O, Q, S, U, W, Y
                 const char *right_letters = "ACEGIKMOQSUWY";
                 
@@ -904,13 +1020,18 @@ static void barcode_detection_task(void *pv) {
                     printf("Executing RIGHT turn for letter '%c'\n", decoded_letter);
                     drive_signed(40,40);
                     sleep_ms(500);
+                    barcode_update_speed_and_distance();
+                    mqtt_publish_telemetry(speed, distance, 0.0f, 0.0f, "EXECUTED RIGHT TURN");
                     drive_signed(-40, 60); // Right turn
                     sleep_ms(500);
+                    
                 } else {
                     // LEFT turn (B, D, F, H, J, L, N, P, R, T, V, X, Z)
                     printf("Executing LEFT turn for letter '%c'\n", decoded_letter);
                     drive_signed(40, -40); // Left turn
                     sleep_ms(500);
+                    barcode_update_speed_and_distance();
+                    mqtt_publish_telemetry(speed, distance, 0.0f, 0.0f, "EXECUTED LEFT TURN");
                 }
 
                 all_stop();
@@ -951,15 +1072,17 @@ static void barcode_detection_task(void *pv) {
                 uint32_t now = to_ms_since_boot(get_absolute_time());
                 if (mqtt_is_connected() && (now - g_last_pub_ms >= 500)) {
                     g_last_pub_ms = now;
-                    
+                    barcode_update_speed_and_distance();
                     // Create state string with decoded letters, pattern, timing, AND direction
                     char state[400]; // Larger buffer to accommodate all data
                     snprintf(state, sizeof(state), 
                              "DECODED: %s | DIRECTION: %s | PATTERN: %s | TIMING: %s", 
                              scan_result.data, direction_str, nw_pattern, timing_str);
                     
+                    float speed = barcode_get_current_speed_cm_s();
+                    float distance = barcode_get_total_distance_cm();
                     // Publish telemetry with zeros for other values and comprehensive data as state
-                    mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, state);
+                    mqtt_publish_telemetry(speed, distance, 0.0f, 0.0f, state);
                     printf("TELEMETRY SENT: Decoded barcode: %s\n", scan_result.data);
                     printf("TELEMETRY SENT: Inferred direction: %s\n", direction_str);
                     printf("TELEMETRY SENT: Pattern: %s\n", nw_pattern);
@@ -1004,13 +1127,15 @@ static void barcode_detection_task(void *pv) {
                     snprintf(state, sizeof(state), 
                              "SCAN_FAILED | PATTERN: %s | TIMING: %s", 
                              nw_pattern, timing_str);
-                    
-                    mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, state);
+                    strncpy(scan_result.data, "B", BARCODE_MAX_LENGTH);
+                    float speed = barcode_get_current_speed_cm_s();
+                    float distance = barcode_get_total_distance_cm();
+                    mqtt_publish_telemetry(speed, distance, 0.0f, 0.0f, state);
                     printf("TELEMETRY SENT: Scan failed - N/W Pattern: %s\n", nw_pattern);
                     printf("TELEMETRY SENT: Scan failed - Timing Array: %s\n", timing_str);
                 }
                 
-                printf("❌ Barcode scan failed or no barcode found\n");
+                printf("Barcode scan failed or no barcode found\n");
                 printf("N/W Pattern captured: %s\n", nw_pattern);
                 printf("Timing Array: %s\n", timing_str);
                 scanning_active = false;
@@ -1022,8 +1147,12 @@ static void barcode_detection_task(void *pv) {
             // Check for overall scan timeout (safety)
             uint32_t current_time = to_ms_since_boot(get_absolute_time());
             if (current_time - scan_start_time > SCAN_TIMEOUT_MS) {
-                printf("❌ Overall scan timeout after %lu ms\n", SCAN_TIMEOUT_MS);
-                
+                printf("Overall scan timeout after %lu ms\n", SCAN_TIMEOUT_MS);
+                strncpy(scan_result.data, "B", BARCODE_MAX_LENGTH);
+                scan_result.length = 1;
+                scan_result.valid = true;
+                scan_result.checksum_ok = false;
+                scan_result.scan_time_us = (current_time - scan_start_time) * 1000; // Convert ms to us
                 // Send timeout telemetry with any captured data
                 if (mqtt_is_connected() && (current_time - g_last_pub_ms >= 500)) {
                     g_last_pub_ms = current_time;
@@ -1031,7 +1160,9 @@ static void barcode_detection_task(void *pv) {
                     snprintf(state, sizeof(state), 
                              "TIMEOUT | PATTERN: %s | TIMING: %s", 
                              nw_pattern, timing_str);
-                    mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, state);
+                    float speed = barcode_get_current_speed_cm_s();
+                    float distance = barcode_get_total_distance_cm();
+                    mqtt_publish_telemetry(speed, distance, 0.0f, 0.0f, state);
                     printf("TELEMETRY SENT: Barcode scan timeout\n");
                 }
                 
@@ -1045,9 +1176,12 @@ static void barcode_detection_task(void *pv) {
             
             // Send normal operation telemetry occasionally
             uint32_t now = to_ms_since_boot(get_absolute_time());
-            if (mqtt_is_connected() && (now - g_last_pub_ms >= 2000)) { // Every 2 seconds
+            if (mqtt_is_connected() && (now - g_last_pub_ms >= 500)) { // Every 2 seconds
                 g_last_pub_ms = now;
-                mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, "LINE_FOLLOWING");
+
+                float speed = barcode_get_current_speed_cm_s();
+                float distance = barcode_get_total_distance_cm();
+                mqtt_publish_telemetry(speed, distance, 0.0f, 0.0f, "LINE_FOLLOWING");
             }
             
             // Optional: Print status occasionally
@@ -1071,30 +1205,29 @@ static void barcode_detection_task(void *pv) {
 // MAIN FUNCTION FOR BARCODE DETECTION
 // ==============================
 
-int main(void) {
-    stdio_init_all();
-    sleep_ms(4000); // Wait for USB to initialize
+// int main(void) {
+//     stdio_init_all();
+//     // sleep_ms(2000); // Wait for USB to initialize
 
-    printf("\n=== BARCODE DETECTION ROBOT ===\n");
-    printf("Starting barcode detection task...\n");
+//     // printf("\n=== BARCODE DETECTION ROBOT ===\n");
+//     // printf("Starting barcode detection task...\n");
 
-    // Create the barcode detection task
-    xTaskCreate(
-        barcode_detection_task, 
-        "barcode_detection",
-        4096,                  // stack size
-        NULL,
-        tskIDLE_PRIORITY + 1,  // priority
-        NULL
-    );
+//     // Create the barcode detection task
+//     xTaskCreate(
+//         barcode_detection_task, 
+//         "barcode_detection",
+//         4096,                  // stack size
+//         NULL,
+//         tskIDLE_PRIORITY + 2,  // priority
+//         NULL
+//     );
 
-    // Start FreeRTOS scheduler
-    vTaskStartScheduler();
+//     // Start FreeRTOS scheduler
+//     vTaskStartScheduler();
 
-    // Should never reach here
-    while (1) {
-        tight_loop_contents();
-    }
+//     // Should never reach here
+//     while (1) {
+//     }
     
-    return 0;
-}
+//     return 0;
+// }

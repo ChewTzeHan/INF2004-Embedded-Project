@@ -153,6 +153,11 @@
 
 #include "mqtt_client.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+#include "lwip/netif.h"
+#include "lwip/ip4_addr.h"
+
 // ---------- User/Build configuration (can be -D… in CMake) ----------
 #ifndef WIFI_SSID
 #define WIFI_SSID       "YOUR_SSID"
@@ -211,6 +216,7 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
     printf("[MQTT] <- DATA: %s%s\n", buf, (flags & MQTT_DATA_FLAG_LAST) ? " [LAST]" : "");
     // Parse commands here if you want (e.g. {"type":"barcode","value":"LEFT"})
 }
+
 
 /* =============================
  * MQTT connection callback
@@ -293,7 +299,7 @@ bool wifi_and_mqtt_start(void) {
 
     printf("[NET] Connecting Wi-Fi SSID=\"%s\"…\n", WIFI_SSID);
     int r = cyw43_arch_wifi_connect_timeout_ms(
-        WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 30000000);
+        WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 10000000);
     if (r) {
         printf("[NET] Wi-Fi connect failed (err=%d)\n", r);
         return false;
@@ -443,4 +449,47 @@ void mqtt_loop_poll(void) {
     // With pico_cyw43_arch_lwip_sys_freertos, lwIP runs on its own thread.
     // Nothing to do here; brief sleep to yield CPU if someone calls it anyway.
     sleep_ms(1);
+}
+// Add to mqtt_client.c
+static void wifi_connect_task(void *pvParameters) {
+    printf("[NET] WiFi connection task started\n");
+    
+    if (cyw43_arch_init()) {
+        printf("[NET] cyw43_arch_init failed\n");
+        vTaskDelete(NULL);
+        return;
+    }
+    cyw43_arch_enable_sta_mode();
+
+    printf("[NET] Connecting Wi-Fi...\n");
+    int r = cyw43_arch_wifi_connect_timeout_ms(
+        WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 15000); // 15 second timeout
+    
+    if (r) {
+        printf("[NET] Wi-Fi connect failed (err=%d)\n", r);
+        cyw43_arch_deinit();
+    } else {
+        printf("[NET] Wi-Fi connected successfully\n");
+        // Optionally start MQTT connection here
+    }
+    
+    vTaskDelete(NULL);
+}
+
+// Modified wifi_and_mqtt_start that doesn't block
+bool wifi_and_mqtt_start_nonblocking(void) {
+    // Start WiFi in background task
+    if (xTaskCreate(
+        wifi_connect_task,
+        "WiFi_Conn",
+        2048,
+        NULL,
+        tskIDLE_PRIORITY,  // Low priority - don't block robot
+        NULL
+    ) != pdPASS) {
+        printf("[NET] Failed to create WiFi task\n");
+        return false;
+    }
+    
+    return true; // Return immediately - WiFi will connect in background
 }

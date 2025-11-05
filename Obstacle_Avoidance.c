@@ -230,7 +230,7 @@ bool object_at_stop_distance(float distance_cm) {
 // ==============================
 
 float calculate_object_width(float distance_left, float distance_right, float servo_angle_left, float servo_angle_right) {
-    float angle_C = fabsf((servo_angle_left+20.0f) - (servo_angle_right-20.0f)) * (float)M_PI / 180.0f;
+    float angle_C = fabsf((servo_angle_left+15.0f) - (servo_angle_right-15.0f)) * (float)M_PI / 180.0f;
     
     float a_squared = distance_left * distance_left;
     float b_squared = distance_right * distance_right;
@@ -549,6 +549,7 @@ void complete_avoidance_cycle(void) {
                     char width_str[30];
                     snprintf(width_str, sizeof(width_str), "object width: %.1fcm", scan_result.width_cm);
                     mqtt_publish_telemetry(speed, dist, yaw, ultra, width_str);
+                    sleep_ms(3000);
             
                 }
                 
@@ -643,7 +644,7 @@ void line_follow_with_obstacle_avoidance(void) {
     printf("Behavior: Line follow until object detected -> Avoid object -> Resume line following\n");
     
     bool system_active = true;
-    bool avoiding_obstacle = false;
+    
 
     // Start Wi-Fi + MQTT (safe: it locks around lwIP calls inside)
     bool connected = false;
@@ -653,14 +654,14 @@ void line_follow_with_obstacle_avoidance(void) {
         printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
     }
 
-    if (!connected) {
-        printf("[NET] Wi-Fi/MQTT start failed after %d attempts (continuing without MQTT)\n", 
-               MAX_CONNECTION_ATTEMPTS);
-    } else {
-        printf("[NET] Wi-Fi/MQTT connected successfully\n");
-    }
+    // if (!connected) {
+    //     printf("[NET] Wi-Fi/MQTT start failed after %d attempts (continuing without MQTT)\n", 
+    //            MAX_CONNECTION_ATTEMPTS);
+    // } else {
+    //     printf("[NET] Wi-Fi/MQTT connected successfully\n");
+    // }
     
-    printf("[NET] Local IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
+    // printf("[NET] Local IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
     
     sleep_ms(2000);
     // Initialize systems
@@ -679,13 +680,15 @@ void line_follow_with_obstacle_avoidance(void) {
 
     uint32_t last_encoder_debug_time = 0;
     const uint32_t ENCODER_DEBUG_INTERVAL_MS = 500; // Print every 500ms
+    bool avoiding_obstacle = false;
     //drive_signed(30.0f, 30.0f); // Initial small movement to kick things off
     while (system_active) {
         printf("\n--- NEW LOOP ITERATION ---\n");
         if (!avoiding_obstacle) {
+            printf("sensing...\n");
             // Phase 1: Line following while monitoring for obstacles
             float distance = ultrasonic_get_distance_cm();
-            
+            printf("distance gained: %.1f cm\n", distance);
             if (obstacle_detected(distance)) {
                 printf("\n🚨 OBSTACLE DETECTED at %.1f cm! Stopping line following.\n", distance);
                 all_stop();
@@ -719,9 +722,9 @@ void line_follow_with_obstacle_avoidance(void) {
         }
 
         
-        printf(mqtt_is_connected() ? "MQTT connected\n" : "MQTT not connected\n");
+        //printf(mqtt_is_connected() ? "MQTT connected\n" : "MQTT not connected\n");
         if (mqtt_is_connected() && (now - g_last_pub_ms >= 500)) {
-            printf("MEOWMEOW\n");
+            printf("MEOWMEOW\   n");
             g_last_pub_ms = now;
 
             // Update speed and distance using new interrupt-based system
@@ -756,7 +759,7 @@ void line_follow_with_obstacle_avoidance(void) {
         }
 
         // yield CPU (don't use tight sleep_ms in RTOS loops)
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(20));
             }
 }
 
@@ -802,22 +805,22 @@ static void robot_task(void *pv) {
     vTaskDelete(NULL);                       // never reached, but good practice
 }
 
-// int main(void) {
-//     stdio_init_all();
+int main(void) {
+    stdio_init_all();
 
-//     // Create the robot task (stack size can be tuned; 4096 words is a safe start)
-//     xTaskCreate(
-//         robot_task, 
-//         "robot",
-//         4096,                  // stack words (increase if needed)
-//         NULL,
-//         tskIDLE_PRIORITY + 2,  // priority
-//         NULL
-//     );
+    // Create the robot task (stack size can be tuned; 4096 words is a safe start)
+    xTaskCreate(
+        robot_task, 
+        "robot",
+        4096,                  // stack words (increase if needed)
+        NULL,
+        tskIDLE_PRIORITY + 2,  // priority
+        NULL
+    );
 
-//     // Start FreeRTOS
-//     vTaskStartScheduler();
+    // Start FreeRTOS
+    vTaskStartScheduler();
 
-//     // Should never return
-//     while (1) { /* idle */ }
-// }
+    // Should never return
+    while (1) { /* idle */ }
+}

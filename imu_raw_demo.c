@@ -82,7 +82,7 @@ float angle_difference(float a, float b) {
 
 // ========== I2C Initialization ==========
 void imu_init() {
-    stdio_init_all();
+    // stdio_init_all();
     sleep_ms(100);
 
     i2c_init(I2C_INST, 400000);  // INCREASED to 400kHz for faster reads

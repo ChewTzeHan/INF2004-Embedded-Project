@@ -180,7 +180,12 @@ static float calculate_angle_error(float current_angle, float target_angle) {
 // TELEMETRY PUBLISHING FUNCTION (Updated with speed/distance)
 // ==============================
 
-static void publish_imu_telemetry(const imu_data_t *data, float error, float pid_output, float left_speed, float right_speed) {
+// ==============================
+// TELEMETRY PUBLISHING FUNCTION (Updated with speed/distance and accelerometer data)
+// ==============================
+static void publish_imu_telemetry(const imu_data_t *data, float error, float pid_output, float left_speed, float right_speed, 
+                                 int16_t ax_raw, int16_t ay_raw, int16_t az_raw,
+                                 int16_t ax_filtered, int16_t ay_filtered, int16_t az_filtered) {
     if (!mqtt_is_connected()) {
         return;
     }
@@ -191,14 +196,23 @@ static void publish_imu_telemetry(const imu_data_t *data, float error, float pid
     float yaw_deg = data->yaw;                      // Current yaw angle
     float ultra_cm = 0.0f;                          // Not used in IMU mode
     
-    // Create state string with PID values AND SETPOINT
-    char state[128];
+    // Create state string with PID values, SETPOINT, and accelerometer data
+    char state[256]; // Increased buffer size to accommodate additional data
+    
     if (pid_state.enabled && fabsf(error) > 1.0f) {
-        snprintf(state, sizeof(state), "adjusting: setpoint=%.1f, error=%.1f, pid=%.1f, L=%.1f, R=%.1f", 
-                 pid_config.setpoint, error, pid_output, left_speed, right_speed);
+        snprintf(state, sizeof(state), 
+                 "adjusting: setpoint=%.1f, error=%.1f, pid=%.1f, L=%.1f, R=%.1f | "
+                 "Accel Raw(X:%d Y:%d Z:%d) Filtered(X:%d Y:%d Z:%d)", 
+                 pid_config.setpoint, error, pid_output, left_speed, right_speed,
+                 ax_raw, ay_raw, az_raw,
+                 ax_filtered, ay_filtered, az_filtered);
     } else {
-        snprintf(state, sizeof(state), "idle: setpoint=%.1f, error=%.1f, pid=%.1f, L=%.1f, R=%.1f", 
-                 pid_config.setpoint, error, pid_output, left_speed, right_speed);
+        snprintf(state, sizeof(state), 
+                 "idle: setpoint=%.1f, error=%.1f, pid=%.1f, L=%.1f, R=%.1f | "
+                 "Accel Raw(X:%d Y:%d Z:%d) Filtered(X:%d Y:%d Z:%d)", 
+                 pid_config.setpoint, error, pid_output, left_speed, right_speed,
+                 ax_raw, ay_raw, az_raw,
+                 ax_filtered, ay_filtered, az_filtered);
     }
     
     // Publish telemetry via MQTT (same function call as obstacle avoidance)
@@ -445,8 +459,8 @@ void drive_to_yaw_setpoint(float current_yaw, pid_config_t *config, pid_state_t 
     
     // Calculate motor speeds
     // Positive output means turn right, negative means turn left
-    *left_speed = config->base_speed_left - *pid_output;  // Add for left motor
-    *right_speed = config->base_speed_right + *pid_output; // Subtract for right motor
+    *left_speed = config->base_speed_left + *pid_output;  // Add for left motor
+    *right_speed = config->base_speed_right - *pid_output; // Subtract for right motor
 
     // Clamp motor speeds to valid range (-100 to 100)
     if (*left_speed > 100.0f) *left_speed = 100.0f;
@@ -520,7 +534,6 @@ void set_yaw_setpoint(float target_yaw) {
 // ==============================
 // FREE RTOS TASK FUNCTION (Updated with speed calculation)
 // ==============================
-
 void imu_movement_task(__unused void *params) {
     printf("IMU Movement Task Started\n");
     
@@ -531,11 +544,23 @@ void imu_movement_task(__unused void *params) {
     uint32_t last_print_time = 0;
     const uint32_t print_interval_ms = 30; // Print every 30ms
     
+    // Add local variables to store raw accelerometer data
+    int16_t ax_raw, ay_raw, az_raw;
+    int16_t ax_filtered, ay_filtered, az_filtered;
+    
     while (true) {
         uint32_t current_time = to_ms_since_boot(get_absolute_time());
         
         // Read IMU data
         if (read_imu_data(&current_data)) {
+            // Read raw accelerometer data separately for telemetry
+            if (read_accel_raw(&ax_raw, &ay_raw, &az_raw)) {
+                // Apply filtering to get filtered values
+                ax_filtered = apply_filter(ax_raw, ax_history, &filter_index);
+                ay_filtered = apply_filter(ay_raw, ay_history, &filter_index);
+                az_filtered = apply_filter(az_raw, az_history, &filter_index);
+            }
+            
             float pid_output, left_speed, right_speed;
             
             // Apply PID control for yaw
@@ -543,13 +568,14 @@ void imu_movement_task(__unused void *params) {
             
             float error = calculate_angle_error(current_data.yaw, pid_config.setpoint);
             
-            // Update speed and distance calculation (same pattern as obstacle avoidance)
+            // Update speed and distance calculation
             imu_update_speed_and_distance();
             
-            // Publish MQTT telemetry at regular intervals with PID values and speed/distance
+            // Publish MQTT telemetry with ALL parameters including accelerometer data
             if (mqtt_is_connected() && (current_time - g_imu_last_pub_ms >= 500)) {
                 g_imu_last_pub_ms = current_time;
-                publish_imu_telemetry(&current_data, error, pid_output, left_speed, right_speed);
+                publish_imu_telemetry(&current_data, error, pid_output, left_speed, right_speed,
+                                     ax_raw, ay_raw, az_raw, ax_filtered, ay_filtered, az_filtered);
             }
             
             // Print data at specified interval
@@ -566,11 +592,11 @@ void imu_movement_task(__unused void *params) {
             printf("[IMU] Failed to read sensor data\n");
         }
         
-        // Handle MQTT polling (same as obstacle avoidance)
+        // Handle MQTT polling
         mqtt_loop_poll();
         
-        // Task delay - adjust based on your needs
-        vTaskDelay(pdMS_TO_TICKS(50)); // 20Hz update rate
+        // Task delay
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -614,7 +640,8 @@ static void imu_robot_task(void *pv) {
     uint32_t last_speed_update_time = 0;
     const uint32_t pid_interval_ms = 50; // 20Hz PID control
     const uint32_t speed_update_interval_ms = 100; // 10Hz speed update
-    
+    int16_t ax_raw, ay_raw, az_raw;
+    int16_t ax_filtered, ay_filtered, az_filtered;
     while (true) {
         uint32_t current_time = to_ms_since_boot(get_absolute_time());
         
@@ -622,7 +649,13 @@ static void imu_robot_task(void *pv) {
         if (read_imu_data(&imu_data)) {
             float pid_output, left_speed, right_speed;
             float error = calculate_angle_error(imu_data.yaw, pid_config.setpoint);
-            
+            if (read_accel_raw(&ax_raw, &ay_raw, &az_raw)) {
+                // Apply filtering
+                ax_filtered = apply_filter(ax_raw, ax_history, &filter_index);
+                ay_filtered = apply_filter(ay_raw, ay_history, &filter_index);
+                az_filtered = apply_filter(az_raw, az_history, &filter_index);
+            }
+
             // Apply PID control at higher frequency (20Hz)
             if (current_time - last_pid_time >= pid_interval_ms) {
                 drive_to_yaw_setpoint(imu_data.yaw, &pid_config, &pid_state, &pid_output, &left_speed, &right_speed);
@@ -638,7 +671,8 @@ static void imu_robot_task(void *pv) {
             // Publish MQTT telemetry with PID values and speed/distance
             if (mqtt_is_connected() && (current_time - g_imu_last_pub_ms >= 500)) {
                 g_imu_last_pub_ms = current_time;
-                publish_imu_telemetry(&imu_data, error, pid_output, left_speed, right_speed);
+                publish_imu_telemetry(&imu_data, error, pid_output, left_speed, right_speed,
+                                     ax_raw, ay_raw, az_raw, ax_filtered, ay_filtered, az_filtered);
             }
             
             // Print data every 500ms with comprehensive information

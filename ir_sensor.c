@@ -11,6 +11,7 @@ void ir_init(ir_calib_t *cal) {
         cal->min_raw = 4095;
         cal->max_raw = 0;
     }
+    printf("IR: ADC initialized on GPIO%d\n", IR_GPIO);
 }
 
 void ir_digital_init(void) {
