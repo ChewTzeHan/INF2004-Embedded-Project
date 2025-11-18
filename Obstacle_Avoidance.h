@@ -16,9 +16,9 @@
 #define CIRCLE_BASE_SPEED_RIGHT 40.0f
 
 // Distance thresholds (cm)
-#define OBSTACLE_DETECTION_DISTANCE_CM 20.0f
-#define SAFE_DISTANCE_CM 20.0f
-#define INITIAL_STOP_DISTANCE_CM 20.0f
+#define OBSTACLE_DETECTION_DISTANCE_CM 30.0f
+#define SAFE_DISTANCE_CM 30.0f
+#define INITIAL_STOP_DISTANCE_CM 40.0f
 
 // Encoder pins
 #define ENC1_DIG 10

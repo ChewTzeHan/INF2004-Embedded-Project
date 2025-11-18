@@ -412,7 +412,7 @@ void mqtt_publish_telemetry(float speed, float distance_cm, float yaw_deg,
     }
 
     char topic[128];
-    char payload[256];
+    char payload[768];
 
     // Build JSON first
     snprintf(payload, sizeof(payload),

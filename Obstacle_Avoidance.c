@@ -23,9 +23,9 @@
 // PID LINE FOLLOWING CONSTANTS
 // ==============================
 
-// #define TURN_90_DEG_PULSES  8  // Adjust based on your encoder counts
-// #define TURN_180_DEG_PULSES  16 // Adjust based on your encoder counts
-// #define TURN_45_DEG_PULSES   4  // Adjust based on your encoder counts
+#define TURN_90_DEG_PULSES  9  // Adjust based on your encoder counts
+#define TURN_180_DEG_PULSES  16 // Adjust based on your encoder counts
+#define TURN_45_DEG_PULSES   4  // Adjust based on your encoder counts
 
 // PID global variables
 
@@ -326,10 +326,31 @@ void turn_left_encoder_based(uint32_t target_pulses) {
     encoder_reset_distance(ENCODER_RIGHT_GPIO);
     
     float turn_speed = 50.0f;
-    drive_signed(-turn_speed, turn_speed);
-    sleep_ms(sleep_duration_ms);
+    drive_signed(-turn_speed*1.25f, turn_speed);
+    
+    // Wait until we reach the target pulse count
+    uint32_t last_print_time = 0;
+    uint32_t start_time = to_ms_since_boot(get_absolute_time());
+    
+    while (get_average_pulses() < target_pulses) {
+        uint32_t current_time = to_ms_since_boot(get_absolute_time());
+        if (current_time - last_print_time >= 100) {
+            printf("[TURN] Progress: %lu/%lu pulses (Time: %lums)\n", 
+                get_average_pulses(), target_pulses, current_time - start_time);
+            last_print_time = current_time;
+            
+            // Safety timeout - if no encoder pulses detected after 3 seconds, break out
+            if ((current_time - start_time) > 3000 && get_average_pulses() == 0) {
+                printf("[TURN] WARNING: No encoder pulses detected after 3 seconds!\n");
+                printf("[TURN] Falling back to timed turn\n");
+                break;
+            }
+        }
+        sleep_ms(10);
+    }
     
     all_stop();
+    printf("[TURN] Left turn completed: %lu pulses achieved\n", get_average_pulses());
 }
 
 void turn_right_encoder_based(uint32_t target_pulses) {
@@ -340,17 +361,44 @@ void turn_right_encoder_based(uint32_t target_pulses) {
     encoder_reset_distance(ENCODER_RIGHT_GPIO);
     
     float turn_speed = 50.0f;
-    drive_signed(turn_speed, -turn_speed);
-    sleep_ms(sleep_duration_ms);
+    drive_signed(turn_speed*1.25f, -turn_speed);
+    
+    // Wait until we reach the target pulse count
+    uint32_t last_print_time = 0;
+    uint32_t start_time = to_ms_since_boot(get_absolute_time());
+    
+    while (get_average_pulses() < target_pulses) {
+        uint32_t current_time = to_ms_since_boot(get_absolute_time());
+        if (current_time - last_print_time >= 100) {
+            printf("[TURN] Progress: %lu/%lu pulses (Time: %lums)\n", 
+                get_average_pulses(), target_pulses, current_time - start_time);
+            last_print_time = current_time;
+            
+            // Safety timeout - if no encoder pulses detected after 3 seconds, break out
+            if ((current_time - start_time) > 3000 && get_average_pulses() == 0) {
+                printf("[TURN] WARNING: No encoder pulses detected after 3 seconds!\n");
+                printf("[TURN] Falling back to timed turn\n");
+                break;
+            }
+        }
+        sleep_ms(10);
+    }
     
     all_stop();
+    printf("[TURN] Right turn completed: %lu pulses achieved\n", get_average_pulses());
 }
 
 void turn_left_90_degrees(void) {
     turn_left_encoder_based(TURN_90_DEG_PULSES);
+    // drive_signed(-40*1.25f, 40);
+    // sleep_ms(1250);
+    // all_stop();
 }
 
 void turn_right_90_degrees(void) {
+    // drive_signed(40*1.25f, -40);
+    // sleep_ms(1250);
+    // all_stop();
     turn_right_encoder_based(TURN_90_DEG_PULSES);
 }
 
@@ -368,27 +416,55 @@ void turn_left_45_degrees(void) {
 // ==============================
 
 bool check_if_object_still_there(void) {
-    printf("[CHECK] Checking if object is still present...\n");
-    
-    printf("[CHECK] Turning right to face object direction\n");
     turn_right_90_degrees();
-    sleep_ms(500);
+    printf("[CHECK] Scanning 90-degree arc to check if object is still present...\n");
     
-    float distance = ultrasonic_get_distance_cm();
-    printf("[CHECK] Distance after turn: %.1f cm\n", distance);
+    const float SCAN_START_ANGLE = 45.0f;   // Start scanning at 45 degrees
+    const float SCAN_END_ANGLE = 135.0f;    // End scanning at 135 degrees  
+    const float SCAN_STEP = 2.0f;          // 5 degree steps
+    const float OBJECT_DETECTION_THRESHOLD = OBSTACLE_DETECTION_DISTANCE_CM;
     
-    bool object_present = obstacle_detected(distance);
+    bool object_detected = false;
+    int detection_count = 0;
     
-    if (object_present) {
-        printf("[CHECK] Object is still present at %.1f cm\n", distance);
-        printf("[CHECK] Turning left to continue circling\n");
-        turn_left_90_degrees();
-    } else {
-        printf("[CHECK] Object is no longer present\n");
-        printf("[CHECK] Turning left to continue pattern\n");
+    printf("[CHECK] Scanning from %.1f° to %.1f° in %.1f° steps\n", 
+           SCAN_START_ANGLE, SCAN_END_ANGLE, SCAN_STEP);
+    
+    // Scan from left to right (45° to 135°)
+    for (float angle = SCAN_START_ANGLE; angle <= SCAN_END_ANGLE; angle += SCAN_STEP) {
+        servo_set_angle(angle);
+        sleep_ms(100);  // Allow servo to settle
+        
+        float distance = ultrasonic_get_distance_cm();
+        printf("[CHECK] Angle: %.1f°, Distance: %.1f cm - ", angle, distance);
+        
+        if (obstacle_detected(distance)) {
+            printf("OBJECT DETECTED\n");
+            object_detected = true;
+            detection_count++;
+            break;
+
+        } else {
+            printf("clear\n");
+        }
+        
+        sleep_ms(50);  // Brief pause between readings
     }
     
-    return object_present;
+    // Return servo to center position
+    servo_set_angle(85.0f);
+    sleep_ms(200);
+    
+    printf("[CHECK] Scan complete: %d detections in %d positions\n", 
+           detection_count, (int)((SCAN_END_ANGLE - SCAN_START_ANGLE) / SCAN_STEP) + 1);
+    
+    if (object_detected) {
+        printf("[CHECK] ✅ Object is still present (%d detections)\n", detection_count);
+    } else {
+        printf("[CHECK] ❌ Object is no longer present\n");
+    }
+    
+    return object_detected;
 }
 
 // ==============================
@@ -402,15 +478,17 @@ void encircle_object_with_checking(void) {
     uint32_t check_counter = 0;
     uint32_t no_object_counter = 0;
     const uint32_t REQUIRED_NO_OBJECT_CHECKS = 2;
-    
+    uint8_t turns_finished = 0;
     while (continue_circling) {
         check_counter++;
         printf("\n[ENCIRCLE] Check cycle %d (No-object count: %d/%d)\n", 
                check_counter, no_object_counter, REQUIRED_NO_OBJECT_CHECKS);
         
         printf("[ENCIRCLE] Moving forward for 2.5 seconds\n");
+        encoder_reset_distance(ENCODER_LEFT_GPIO);
+        encoder_reset_distance(ENCODER_RIGHT_GPIO);
         drive_signed(CIRCLE_BASE_SPEED_LEFT, CIRCLE_BASE_SPEED_RIGHT);
-        sleep_ms(1150);
+        //sleep_ms(500);
 
         uint32_t last_print_time = 0;
         uint32_t start_time = to_ms_since_boot(get_absolute_time());
@@ -431,12 +509,28 @@ void encircle_object_with_checking(void) {
                     break;
                 }
             }
+
+            if(turns_finished >= 2){
+                uint16_t ir_raw = ir_read_raw();
+                int color_state = classify_colour(ir_raw);
+
+                if (color_state == 1) {
+                    printf("[ENCIRCLE] 🎯 BLACK LINE DETECTED DURING CIRCLE! Raw: %u, Stopping.\n", ir_raw);
+                    continue_circling = false;
+                    break;
+                }
+            }
+
             
             sleep_ms(10);
         }
-
+        
         all_stop();
-        sleep_ms(3000);
+        sleep_ms(2000);
+
+        if(!continue_circling){
+            break;
+        }
         
         printf("[ENCIRCLE] Checking if object is still present\n");
         bool object_still_there = check_if_object_still_there();
@@ -444,6 +538,7 @@ void encircle_object_with_checking(void) {
         if (object_still_there) {
             printf("[ENCIRCLE] Object still detected, continuing to circle\n");
             printf("[ENCIRCLE] No-object counter reset to 0\n");
+            turn_left_90_degrees();
         } else {
             no_object_counter++;
             printf("[ENCIRCLE] Object not detected - no-object counter: %d/%d\n", 
@@ -452,42 +547,69 @@ void encircle_object_with_checking(void) {
             if (no_object_counter >= REQUIRED_NO_OBJECT_CHECKS) {
                 printf("[ENCIRCLE] ✅ Object cleared for %d consecutive checks!\n", REQUIRED_NO_OBJECT_CHECKS);
                 printf("[ENCIRCLE] Moving straight forward to continue path\n");
-                uint32_t line_search_start_time = to_ms_since_boot(get_absolute_time());
-                const uint32_t MAX_SEARCH_TIME_MS = 10000; // 10 second timeout
-                bool line_detected = false;
 
-                while (!line_detected && (to_ms_since_boot(get_absolute_time()) - line_search_start_time < MAX_SEARCH_TIME_MS)) {
-                // Read IR sensor
-                uint16_t ir_raw = ir_read_raw();
-                int color_state = classify_colour(ir_raw);
-                
-                // Debug output (optional - can be removed)
-                static uint32_t last_debug_time = 0;
-                uint32_t current_time = to_ms_since_boot(get_absolute_time());
-                if (current_time - last_debug_time > 500) {
-                    printf("[LINE_SEARCH] IR Raw: %u, Color: %d\n", ir_raw, color_state);
-                    last_debug_time = current_time;
+                drive_signed(CIRCLE_BASE_SPEED_LEFT, CIRCLE_BASE_SPEED_RIGHT);
+                while (get_average_pulses() < target_pulses) {
+                    // No need to call update_encoder_counts() - interrupts handle it automatically
+                    
+                    uint32_t current_time = to_ms_since_boot(get_absolute_time());
+                    if (current_time - last_print_time >= 100) {
+                        printf("[TURN] Progress: %lu/%lu pulses (Time: %lums)\n", 
+                            get_average_pulses(), target_pulses, current_time - start_time);
+                        last_print_time = current_time;
+                        
+                        if ((current_time - start_time) > 3000 && get_average_pulses() == 0) {
+                            printf("[TURN] WARNING: No encoder pulses detected after 3 seconds!\n");
+                            printf("[TURN] Falling back to timed turn\n");
+                            break;
+                        }
+                    }
+                    
+                    sleep_ms(10);
                 }
+
+                all_stop();
+                no_object_counter = 0;
+                turns_finished++;
+
+                // uint32_t line_search_start_time = to_ms_since_boot(get_absolute_time());
+                // const uint32_t MAX_SEARCH_TIME_MS = 10000; // 10 second timeout
+                // bool line_detected = false;
+
+            //     while (!line_detected && (to_ms_since_boot(get_absolute_time()) - line_search_start_time < MAX_SEARCH_TIME_MS)) {
+            //     // Read IR sensor
+            //     uint16_t ir_raw = ir_read_raw();
+            //     int color_state = classify_colour(ir_raw);
                 
-                // Check for black line (color_state 1 = Black according to your function)
-                if (color_state == 1) {
-                    line_detected = true;
-                    printf("[ENCIRCLE] 🎯 BLACK LINE DETECTED! Raw: %u, Stopping.\n", ir_raw);
-                    break;
-                }
+            //     // Debug output (optional - can be removed)
+            //     static uint32_t last_debug_time = 0;
+            //     uint32_t current_time = to_ms_since_boot(get_absolute_time());
+            //     if (current_time - last_debug_time > 500) {
+            //         printf("[LINE_SEARCH] IR Raw: %u, Color: %d\n", ir_raw, color_state);
+            //         last_debug_time = current_time;
+            //     }
                 
-                // Continue driving forward
-                drive_signed(BASE_SPEED_LEFT, BASE_SPEED_RIGHT);
-                sleep_ms(50);
-            } 
+            //     // Check for black line (color_state 1 = Black according to your function)
+            //     if (color_state == 1) {
+            //         line_detected = true;
+            //         printf("[ENCIRCLE] 🎯 BLACK LINE DETECTED! Raw: %u, Stopping.\n", ir_raw);
+            //         break;
+            //     }
+                
+            //     // Continue driving forward
+            //     drive_signed(BASE_SPEED_LEFT, BASE_SPEED_RIGHT);
+            //     sleep_ms(50);
+            // } 
             all_stop();
                 
-                continue_circling = false;
+                //continue_circling = false;
                 printf("[ENCIRCLE] Object avoidance completed successfully!\n");
-            } else {
+            } 
+            else {
                 printf("[ENCIRCLE] Object not detected, but need %d more check(s) to confirm\n", 
                        REQUIRED_NO_OBJECT_CHECKS - no_object_counter);
                 printf("[ENCIRCLE] Continuing circling pattern...\n");
+                turn_left_90_degrees();
             }
         }
         
@@ -499,6 +621,8 @@ void encircle_object_with_checking(void) {
             all_stop();
             continue_circling = false;
         }
+
+        
         
         sleep_ms(500);
     }
@@ -565,13 +689,13 @@ void complete_avoidance_cycle(void) {
             sleep_ms(50);
         }
         
-        // printf("[CYCLE] Phase 2: Turning left to start circling\n");
-        // sleep_ms(1000);
-        // turn_left_90_degrees();
-        // sleep_ms(1000);
+        printf("[CYCLE] Phase 2: Turning left to start circling\n");
+        sleep_ms(1000);
+        turn_left_90_degrees();
+        sleep_ms(1000);
         
-        // printf("[CYCLE] Phase 3: Circling object with periodic checks\n");
-        // encircle_object_with_checking();
+        printf("[CYCLE] Phase 3: Circling object with periodic checks\n");
+        encircle_object_with_checking();
         
         // printf("[CYCLE] Object avoidance completed!\n");
         // printf("[CYCLE] Robot has successfully navigated around the object.\n");
@@ -579,7 +703,14 @@ void complete_avoidance_cycle(void) {
         
         cycle_active = false;
         servo_set_angle(85.0f);
-        sleep_ms(5000);
+
+        sleep_ms(2000);
+        // drive_signed(40, 40);
+        // sleep_ms(500);
+        drive_signed(-40, 60); //right turn
+        sleep_ms(500);
+        all_stop();
+        sleep_ms(2000);
     }
 }
 
@@ -650,9 +781,9 @@ void line_follow_with_obstacle_avoidance(void) {
     bool connected = false;
     int attempts = 0;
 
-    if (!wifi_and_mqtt_start()) {
-        printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
-    }
+    // if (!wifi_and_mqtt_start()) {
+    //     printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
+    // }
 
     // if (!connected) {
     //     printf("[NET] Wi-Fi/MQTT start failed after %d attempts (continuing without MQTT)\n", 
@@ -678,16 +809,26 @@ void line_follow_with_obstacle_avoidance(void) {
     sleep_ms(2000);
     printf("Starting combined operation...\n");
 
+
+    // while(1){
+    //     turn_left_90_degrees();
+    //     sleep_ms(1000);
+    //     turn_right_90_degrees();
+    //     sleep_ms(1000);
+    // }
+
+
     uint32_t last_encoder_debug_time = 0;
     const uint32_t ENCODER_DEBUG_INTERVAL_MS = 500; // Print every 500ms
     bool avoiding_obstacle = false;
+    float distance = 0.0f;
     //drive_signed(30.0f, 30.0f); // Initial small movement to kick things off
     while (system_active) {
         printf("\n--- NEW LOOP ITERATION ---\n");
         if (!avoiding_obstacle) {
             printf("sensing...\n");
             // Phase 1: Line following while monitoring for obstacles
-            float distance = ultrasonic_get_distance_cm();
+            distance = ultrasonic_get_distance_cm();
             printf("distance gained: %.1f cm\n", distance);
             if (obstacle_detected(distance)) {
                 printf("\n🚨 OBSTACLE DETECTED at %.1f cm! Stopping line following.\n", distance);
@@ -767,36 +908,36 @@ void line_follow_with_obstacle_avoidance(void) {
 // TEST FUNCTIONS
 // ==============================
 
-void obstacle_avoidance_test(void) {
-    printf("\n=== OBSTACLE AVOIDANCE TEST ===\n");
+// void obstacle_avoidance_test(void) {
+//     printf("\n=== OBSTACLE AVOIDANCE TEST ===\n");
     
-    ultrasonic_init();
-    motor_encoder_init();
-    servo_init();
+//     ultrasonic_init();
+//     motor_encoder_init();
+//     servo_init();
     
-    // Initialize the new interrupt-based encoder system
-    speed_calc_init();
+//     // Initialize the new interrupt-based encoder system
+//     speed_calc_init();
     
-    imu_init();
+//     imu_init();
 
-    printf("Starting obstacle avoidance cycle...\n\n");
-    complete_avoidance_cycle();
-}
+//     printf("Starting obstacle avoidance cycle...\n\n");
+//     complete_avoidance_cycle();
+// }
 
-void calibrate_turning_pulses(void) {
-    printf("\n=== TURNING CALIBRATION ===\n");
-    printf("Press any key to start 90-degree right turn calibration...\n");
-    getchar();
+// void calibrate_turning_pulses(void) {
+//     printf("\n=== TURNING CALIBRATION ===\n");
+//     printf("Press any key to start 90-degree right turn calibration...\n");
+//     getchar();
     
-    turn_right_encoder_based(TURN_90_DEG_PULSES);
+//     turn_right_encoder_based(TURN_90_DEG_PULSES);
     
-    printf("\nCalibration complete. Actual pulses used: %lu\n", get_average_pulses());
-    printf("If the turn wasn't exactly 90 degrees, adjust TURN_90_DEG_PULSES in the code.\n");
-}
+//     printf("\nCalibration complete. Actual pulses used: %lu\n", get_average_pulses());
+//     printf("If the turn wasn't exactly 90 degrees, adjust TURN_90_DEG_PULSES in the code.\n");
+// }
 
-// ==============================
-// MAIN FUNCTION
-// ==============================
+// // ==============================
+// // MAIN FUNCTION
+// // ==============================
 
 static void robot_task(void *pv) {
     // optional: small delay to let USB come up

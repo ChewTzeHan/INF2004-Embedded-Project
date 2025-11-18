@@ -30,7 +30,7 @@ if (EXISTS ${PICO_LWIP_CONTRIB_PATH}/apps/ping/ping.c)
                 #PING_USE_SOCKETS=1          # Use sockets for ping
                 PICO_MAX_SHARED_IRQ_HANDLERS=8
 
-                BROKER_IP="192.168.63.104"        # <-- put YOUR broker IP here
+                BROKER_IP="192.168.180.104"        # <-- put YOUR broker IP here
                 # BROKER_IP="192.168.0.7"
                 BASE_TOPIC="robot/alpha"            # <-- or your preferred base
                 MQTT_PORT=1883
