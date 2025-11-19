@@ -76,7 +76,10 @@ bool barcode_scan_while_moving(barcode_result_t *result, char *nw_pattern, size_
                               char *timing_str, size_t timing_size, char *direction_str, size_t direction_size);
 bool decode_with_sliding_window(const uint32_t *dur, uint16_t n, barcode_result_t *result, char *all_decoded_values, size_t decoded_size);
 barcode_command_t barcode_parse_command(const char *barcode_str);
-
+// Add these to barcode.h
+bool check_barcode_detection(void);
+bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t pattern_size, 
+                      char *timing_str, size_t timing_size, char *direction_str, size_t direction_size);
 #ifdef __cplusplus
 }
 #endif

@@ -17,7 +17,7 @@
 
 // Distance thresholds (cm)
 #define OBSTACLE_DETECTION_DISTANCE_CM 30.0f
-#define SAFE_DISTANCE_CM 30.0f
+#define SAFE_DISTANCE_CM 20.0f
 #define INITIAL_STOP_DISTANCE_CM 40.0f
 
 // Encoder pins
@@ -91,4 +91,12 @@ void follow_line_simple(void);
 void set_motor_speeds_pid(uint16_t ir_value);
 float pid_calculation(uint16_t ir_value);
 
+// Add these to Obstacle_Avoidance.h
+bool check_obstacle_detection(void);
+void avoid_obstacle_only(void);
+// Add these to Obstacle_Avoidance.h
+float get_current_speed_cm_s(void);
+float get_total_distance_cm(void);
+void update_speed_and_distance(void);
+float get_heading_fast(float* direction);
 #endif

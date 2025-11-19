@@ -1588,7 +1588,7 @@ static void barcode_detection_task(void *pv) {
             }
         } else {
             // Phase 1: Normal line following mode
-            // follow_line_simple();
+            follow_line_simple();
             
             // Send normal operation telemetry occasionally
             uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -1617,6 +1617,163 @@ static void barcode_detection_task(void *pv) {
     vTaskDelete(NULL);
 }
 
+// Modified barcode scanning without built-in line following
+// Add to barcode.c
+bool check_barcode_detection(void) {
+    return ir_read_digital(); // Returns true when black is detected
+}
+
+// Modified barcode scanning without built-in line following
+// Modified barcode scanning with slower line following for stability
+bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t pattern_size, 
+                      char *timing_str, size_t timing_size, char *direction_str, size_t direction_size) {
+    memset(result, 0, sizeof(*result));
+    memset(nw_pattern, 0, pattern_size);
+    memset(timing_str, 0, timing_size);
+    memset(direction_str, 0, direction_size);
+    
+    uint32_t tstart = time_us_32();
+    uint32_t dur[MAX_TRANSITIONS]; 
+    uint16_t n = 0;
+    bool last_state = ir_read_digital();
+    uint32_t seg_start = time_us_32();
+    uint32_t last_change = seg_start;
+
+    printf("\n=== BARCODE SCAN WITH LINE FOLLOWING ===\n");
+    printf("Using slower line following for stable scanning...\n");
+
+    // Wait for first transition (black bar) while doing line following
+    printf("Waiting for first black bar with line following...\n");
+    uint32_t position_start_time = time_us_32();
+    bool found_black_bar = false;
+    
+    while ((time_us_32() - position_start_time) < 2000000) {
+        // Use slower, smoother line following during positioning
+        follow_line_simple_with_params(32.5, 30, 10.5);
+        
+        bool current_state = ir_read_digital();
+        
+        if (current_state) { // Black detected
+            printf("✓ Positioned on first black bar! Starting capture...\n");
+            found_black_bar = true;
+            last_state = current_state;
+            seg_start = time_us_32();
+            last_change = time_us_32();
+            break;
+        }
+        sleep_us(10000); // 10ms checks
+    }
+
+    if (!found_black_bar) {
+        printf("✗ Timeout: Could not position on first black bar\n");
+        all_stop();
+        return false;
+    }
+
+    // Capture transitions while continuing line following
+    printf("Capturing barcode transitions with line following...\n");
+    uint32_t capture_start_time = time_us_32();
+    const uint32_t MAX_CAPTURE_TIME_US = 5000000;
+
+    while (n < MAX_TRANSITIONS-1) {
+        if ((time_us_32() - capture_start_time) > MAX_CAPTURE_TIME_US) {
+            printf("MAX CAPTURE TIME REACHED (5s)\n");
+            dur[n++] = time_us_32() - seg_start;
+            break;
+        }
+        
+        // Continue line following during capture
+        follow_line_simple_with_params(32.5, 30, 10.5);
+        
+        bool current_state = ir_read_digital();
+        uint32_t now = time_us_32();
+        
+        if (current_state != last_state) {
+            uint32_t duration = now - seg_start;
+            dur[n++] = duration;
+            seg_start = now;
+            last_state = current_state;
+            last_change = now;
+            
+            // Optional: Print first few transitions for debugging
+            if (n <= 10) {
+                const char* element_type = (n % 2 == 1) ? "BAR" : "SPACE";
+                printf("[CAPTURE %d]: %5uus %s\n", n-1, duration, element_type);
+            }
+        } else {
+            uint32_t quiet_time = now - last_change;
+            if ((n > 15 && quiet_time > 750000) || n > 30) {
+                dur[n++] = now - seg_start;
+                printf("Quiet period detected, ending capture. Total transitions: %d\n", n);
+                break;
+            }
+        }
+        sleep_us(10);
+    }
+
+    all_stop(); // Stop after capture is complete
+    printf("Capture complete: %d transitions\n", n);
+    sleep_ms(2000); // Stabilization delay
+
+    // Generate N/W pattern
+    uint32_t narrow = estimate_narrow_us(dur, n);
+    int pattern_index = 0;
+    int timing_index = 0;
+    
+    for (int i = 0; i < n && i < 60 && pattern_index < (pattern_size - 1); i++) {
+        width_t width = classify_width(dur[i], narrow);
+        if (width == WIDTH_NARROW) {
+            nw_pattern[pattern_index++] = 'N';
+        } else if (width == WIDTH_WIDE) {
+            nw_pattern[pattern_index++] = 'W';
+        } else {
+            nw_pattern[pattern_index++] = '?';
+        }
+    }
+    nw_pattern[pattern_index] = '\0';
+
+    // Build timing array string
+    timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, "[");
+    for (int i = 0; i < n && i < 20 && timing_index < (timing_size - 10); i++) {
+        if (i > 0) {
+            timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, ",");
+        }
+        timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, "%u", dur[i]);
+    }
+    timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, "]");
+
+    // Use sliding window decoding
+    char all_decoded_values[256] = {0};
+    bool decode_success = decode_with_sliding_window(dur, n, result, all_decoded_values, sizeof(all_decoded_values));
+    
+    if (decode_success) {
+        result->scan_time_us = time_us_32() - tstart;
+        
+        // Infer direction from decoded letter
+        char decoded_letter = result->data[0];
+        const char *right_letters = "ACEGIKMOQSUWY";
+        
+        if (strchr(right_letters, decoded_letter) != NULL) {
+            snprintf(direction_str, direction_size, "RIGHT");
+        } else {
+            snprintf(direction_str, direction_size, "LEFT");
+        }
+        
+        printf("✅ Barcode scan successful: '%s' -> %s\n", result->data, direction_str);
+        return true;
+    }
+    
+    // Default fallback
+    strncpy(result->data, "B", BARCODE_MAX_LENGTH);
+    result->length = 1;
+    result->valid = true;
+    result->checksum_ok = false;
+    result->scan_time_us = time_us_32() - tstart;
+    snprintf(direction_str, direction_size, "LEFT");
+    
+    printf("⚠️ Barcode scan failed, using default: 'B' -> LEFT\n");
+    return true;
+}
 // ==============================
 // MAIN FUNCTION FOR BARCODE DETECTION
 // ==============================

@@ -538,13 +538,14 @@ void encircle_object_with_checking(void) {
         if (object_still_there) {
             printf("[ENCIRCLE] Object still detected, continuing to circle\n");
             printf("[ENCIRCLE] No-object counter reset to 0\n");
+            no_object_counter = 0;
             turn_left_90_degrees();
         } else {
             no_object_counter++;
             printf("[ENCIRCLE] Object not detected - no-object counter: %d/%d\n", 
                    no_object_counter, REQUIRED_NO_OBJECT_CHECKS);
             
-            if (no_object_counter >= REQUIRED_NO_OBJECT_CHECKS) {
+            if (no_object_counter >= REQUIRED_NO_OBJECT_CHECKS && turns_finished < 2) {
                 printf("[ENCIRCLE] ✅ Object cleared for %d consecutive checks!\n", REQUIRED_NO_OBJECT_CHECKS);
                 printf("[ENCIRCLE] Moving straight forward to continue path\n");
 
@@ -705,8 +706,8 @@ void complete_avoidance_cycle(void) {
         servo_set_angle(85.0f);
 
         sleep_ms(2000);
-        // drive_signed(40, 40);
-        // sleep_ms(500);
+        drive_signed(40, 40);
+        sleep_ms(500);
         drive_signed(-40, 60); //right turn
         sleep_ms(500);
         all_stop();
@@ -781,9 +782,9 @@ void line_follow_with_obstacle_avoidance(void) {
     bool connected = false;
     int attempts = 0;
 
-    // if (!wifi_and_mqtt_start()) {
-    //     printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
-    // }
+    if (!wifi_and_mqtt_start()) {
+        printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
+    }
 
     // if (!connected) {
     //     printf("[NET] Wi-Fi/MQTT start failed after %d attempts (continuing without MQTT)\n", 
@@ -904,6 +905,69 @@ void line_follow_with_obstacle_avoidance(void) {
             }
 }
 
+// Modified obstacle avoidance without built-in line following
+// Add to Obstacle_Avoidance.c
+bool check_obstacle_detection(void) {
+    // Use the fast detection for the main loop
+    return ultrasonic_detect_obstacle_fast();
+}
+
+void avoid_obstacle_only(void) {
+    printf("[AVOID] Starting obstacle avoidance procedure...\n");
+    
+    // Execute the core avoidance cycle without the line following wrapper
+    bool cycle_active = true;
+    
+    while (cycle_active) {
+        printf("\n=== OBSTACLE AVOIDANCE CYCLE ===\n");
+        
+        printf("[AVOID] Phase 1: Object width scanning\n");
+        ObjectScanResult scan_result = scan_object_width();
+        
+        if (scan_result.width_cm > 0) {
+            printf("[AVOID] Object width: %.1f cm\n", scan_result.width_cm);
+            
+            // Send telemetry with obstacle width information
+            char width_str[100];
+            snprintf(width_str, sizeof(width_str), 
+                    "OBSTACLE_WIDTH: %.1fcm", 
+                    scan_result.width_cm);
+            
+            // Get current sensor values for telemetry
+            float speed = get_current_speed_cm_s();
+            float distance = get_total_distance_cm();
+            float ultra = ultrasonic_get_distance_cm();
+            float direction = 0.0f;
+            float yaw = get_heading_fast(&direction);
+            
+            mqtt_publish_telemetry(speed, distance, yaw, ultra, width_str);
+            printf("[AVOID] 📊 Obstacle width telemetry sent: %s\n", width_str);
+            
+            sleep_ms(2000); // Give time to see the telemetry
+            mqtt_publish_telemetry(speed, distance, yaw, ultra, "Performing Object Avoidance");
+        }
+        
+        printf("[AVOID] Phase 2: Turning left to start circling\n");
+
+        turn_left_90_degrees();
+        sleep_ms(1000);
+
+        printf("[AVOID] Phase 3: Circling object\n");
+        encircle_object_with_checking();
+        
+        cycle_active = false;
+        servo_set_angle(85.0f);
+
+        sleep_ms(2000);
+        drive_signed(40*1.25f, 40);
+        sleep_ms(700);
+        drive_signed(-40, 60); //right turn
+        sleep_ms(400);
+        all_stop();
+        sleep_ms(2000);
+    }
+}
+
 // ==============================
 // TEST FUNCTIONS
 // ==============================
@@ -946,22 +1010,22 @@ static void robot_task(void *pv) {
     vTaskDelete(NULL);                       // never reached, but good practice
 }
 
-int main(void) {
-    stdio_init_all();
+// int main(void) {
+//     stdio_init_all();
 
-    // Create the robot task (stack size can be tuned; 4096 words is a safe start)
-    xTaskCreate(
-        robot_task, 
-        "robot",
-        4096,                  // stack words (increase if needed)
-        NULL,
-        tskIDLE_PRIORITY + 2,  // priority
-        NULL
-    );
+//     // Create the robot task (stack size can be tuned; 4096 words is a safe start)
+//     xTaskCreate(
+//         robot_task, 
+//         "robot",
+//         4096,                  // stack words (increase if needed)
+//         NULL,
+//         tskIDLE_PRIORITY + 2,  // priority
+//         NULL
+//     );
 
-    // Start FreeRTOS
-    vTaskStartScheduler();
+//     // Start FreeRTOS
+//     vTaskStartScheduler();
 
-    // Should never return
-    while (1) { /* idle */ }
-}
+//     // Should never return
+//     while (1) { /* idle */ }
+// }

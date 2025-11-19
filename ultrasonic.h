@@ -30,5 +30,5 @@ float ultrasonic_get_distance_cm(void);
 
 // Add this function prototype to ultrasonic.h
 void ultrasonic_trigger_measurement(void);
-
+bool ultrasonic_detect_obstacle_fast(void);
 #endif
