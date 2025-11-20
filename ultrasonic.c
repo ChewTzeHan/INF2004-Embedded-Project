@@ -151,14 +151,3 @@ bool ultrasonic_detect_obstacle_fast(void)
     // Return true if obstacle is within detection range
     return (distance_cm >= 2.0f && distance_cm <= 20.0f); // Using 20cm as detection threshold
 }
-
-// int main(void) {
-//     stdio_init_all();
-//     ultrasonic_init();
-
-//     while (true) {
-//         float dist = ultrasonic_get_distance_cm();
-//         printf("Distance: %.1f cm\n", dist);
-//         sleep_ms(1000);
-//     }
-// }

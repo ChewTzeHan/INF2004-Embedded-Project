@@ -743,26 +743,3 @@ static void imu_robot_task(void* pv)
 
     vTaskDelete(NULL); // never reached, but good practice
 }
-
-// int main(void) {
-//     stdio_init_all();
-
-//     // Wait for serial connection to be established
-//     sleep_ms(4000);
-
-//     // Create the IMU robot task
-//     xTaskCreate(
-//         imu_robot_task,
-//         "imu_robot",
-//         4096,                  // stack words
-//         NULL,
-//         tskIDLE_PRIORITY + 2,  // priority
-//         NULL
-//     );
-
-//     // Start FreeRTOS
-//     vTaskStartScheduler();
-
-//     // Should never return
-//     while (1) { /* idle */ }
-// }

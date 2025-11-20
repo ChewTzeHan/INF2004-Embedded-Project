@@ -229,18 +229,3 @@ void calibrate_motors(void)
         printf("! Compensation may need further adjustment.\n");
     }
 }
-
-// int main() {
-//     stdio_init_all();
-//     sleep_ms(4000); // Wait for serial connection
-
-//     printf("Motor Calibration Program (Polling Version)\n");
-
-//     motor_encoder_init();
-//     calibrate_motors();
-
-//     printf("\nCalibration complete. Press any key to exit.\n");
-//     getchar();
-
-//     return 0;
-// }

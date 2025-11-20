@@ -619,45 +619,6 @@ bool barcode_scan_digital_debug(barcode_result_t* result)
     return false;
 }
 
-// Updated main for digital testing
-// int main(void) {
-//     stdio_init_all();
-//     setvbuf(stdout, NULL, _IONBF, 0);
-
-//     printf("Digital Barcode standalone test starting...\n");
-
-//     // Initialize digital barcode reader
-//     barcode_init();
-
-//     while (1) {
-//         barcode_result_t res;
-
-//         // Method 1: Use polling-based digital scan
-//         if (barcode_scan_digital(&res)) {
-//             printf("BARCODE: '%s' len=%u chk=%d t=%u us\n",
-//                    res.data, (unsigned)res.length, res.checksum_ok, (unsigned)res.scan_time_us);
-
-//             // Parse command if it's a motion command
-//             barcode_command_t cmd = barcode_parse_command(res.data);
-//             if (cmd != BARCODE_CMD_UNKNOWN) {
-//                 printf("COMMAND: ");
-//                 switch (cmd) {
-//                     case BARCODE_CMD_LEFT: printf("LEFT\n"); break;
-//                     case BARCODE_CMD_RIGHT: printf("RIGHT\n"); break;
-//                     case BARCODE_CMD_STOP: printf("STOP\n"); break;
-//                     case BARCODE_CMD_FORWARD: printf("FORWARD\n"); break;
-//                     default: break;
-//                 }
-//             }
-//         } else {
-//             printf("No barcode detected\n");
-//         }
-//         sleep_ms(500);
-//     }
-
-//     return 0;
-// }
-
 // Updated main for real-time debugging
 // Diagnostic main to test the sensor
 
@@ -1869,33 +1830,3 @@ bool barcode_scan_only(barcode_result_t* result, char* nw_pattern, size_t patter
     printf("⚠️ Barcode scan failed, using default: 'B' -> LEFT\n");
     return true;
 }
-// ==============================
-// MAIN FUNCTION FOR BARCODE DETECTION
-// ==============================
-
-// int main(void) {
-//     stdio_init_all();
-//     // sleep_ms(2000); // Wait for USB to initialize
-
-//     // printf("\n=== BARCODE DETECTION ROBOT ===\n");
-//     // printf("Starting barcode detection task...\n");
-
-//     // Create the barcode detection task
-//     xTaskCreate(
-//         barcode_detection_task,
-//         "barcode_detection",
-//         4096,                  // stack size
-//         NULL,
-//         tskIDLE_PRIORITY + 2,  // priority
-//         NULL
-//     );
-
-//     // Start FreeRTOS scheduler
-//     vTaskStartScheduler();
-
-//     // Should never reach here
-//     while (1) {
-//     }
-
-//     return 0;
-// }

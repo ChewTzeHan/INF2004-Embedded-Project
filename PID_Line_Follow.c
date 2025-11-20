@@ -286,13 +286,3 @@ void line_follow_test(void)
 // ==============================
 // MAIN FUNCTION
 // ==============================
-
-// int main(void) {
-//     stdio_init_all();
-//     sleep_ms(4000);
-
-//     printf("\n=== PID Line Following Robot ===\n");
-//     line_follow_test();
-
-//     return 0;
-// }

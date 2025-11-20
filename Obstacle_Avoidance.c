@@ -1033,23 +1033,3 @@ static void robot_task(void* pv)
     line_follow_with_obstacle_avoidance(); // your long-running loop lives here
     vTaskDelete(NULL);                     // never reached, but good practice
 }
-
-// int main(void) {
-//     stdio_init_all();
-
-//     // Create the robot task (stack size can be tuned; 4096 words is a safe start)
-//     xTaskCreate(
-//         robot_task,
-//         "robot",
-//         4096,                  // stack words (increase if needed)
-//         NULL,
-//         tskIDLE_PRIORITY + 2,  // priority
-//         NULL
-//     );
-
-//     // Start FreeRTOS
-//     vTaskStartScheduler();
-
-//     // Should never return
-//     while (1) { /* idle */ }
-// }
