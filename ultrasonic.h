@@ -1,13 +1,5 @@
-//ultrasonic.h
-
-/*
-Header file defining pin assignments and function prototypes for the ultrasonic
- distance measurement module.
-
-TRIG_PIN and ECHO_PIN specify which GPIO pins are used for sending the trigger signal
- and receiving the echo.
-
-The function prototypes allow main.c to access the initialization and measurement routines.
+/**
+ * ultrasonic.h - Header file for HC-SR04 ultrasonic distance sensor functionality.
  */
 
 #ifndef ULTRASONIC_H
@@ -26,7 +18,6 @@ void ultrasonic_init(void);
 
 // Sends trigger pulse and measures the distance in centimeters
 float ultrasonic_get_distance_cm(void);
-
 
 // Add this function prototype to ultrasonic.h
 void ultrasonic_trigger_measurement(void);
