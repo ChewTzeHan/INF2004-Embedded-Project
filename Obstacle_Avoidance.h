@@ -1,40 +1,44 @@
+/**
+ * Obstacle_Avoidance.h - Header file for obstacle detection and servo-based scanning.
+ */
+
 #ifndef OBSTACLE_AVOIDANCE_H
 #define OBSTACLE_AVOIDANCE_H
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 // Servo configuration
-#define SERVO_PIN 15
+#define SERVO_PIN          15
 #define SERVO_MIN_PULSE_US 500
 #define SERVO_MAX_PULSE_US 2500
 
 // Motor speeds
-#define BASE_SPEED_LEFT 32.75f
-#define BASE_SPEED_RIGHT 30.0f
-#define CIRCLE_BASE_SPEED_LEFT 42.25f
+#define BASE_SPEED_LEFT         32.75f
+#define BASE_SPEED_RIGHT        30.0f
+#define CIRCLE_BASE_SPEED_LEFT  42.25f
 #define CIRCLE_BASE_SPEED_RIGHT 40.0f
 
 // Distance thresholds (cm)
 #define OBSTACLE_DETECTION_DISTANCE_CM 30.0f
-#define SAFE_DISTANCE_CM 20.0f
-#define INITIAL_STOP_DISTANCE_CM 40.0f
+#define SAFE_DISTANCE_CM               20.0f
+#define INITIAL_STOP_DISTANCE_CM       40.0f
 
 // Encoder pins
 #define ENC1_DIG 10
 #define ENC2_DIG 11
 
 // Encoder turning configuration
-#define TURN_90_DEG_PULSES 13
+#define TURN_90_DEG_PULSES  13
 #define TURN_180_DEG_PULSES 100
-#define TURN_45_DEG_PULSES 25
+#define TURN_45_DEG_PULSES  25
 
 // External encoder functions from motor_encoder_demo.c
 extern volatile uint32_t encoder_left_count;
 extern volatile uint32_t encoder_right_count;
-extern void update_encoder_counts(void);
-extern void reset_encoder_counts(void);
-extern uint32_t get_encoder_pulses(void);
+extern void              update_encoder_counts(void);
+extern void              reset_encoder_counts(void);
+extern uint32_t          get_encoder_pulses(void);
 
 // Object scanning structure
 typedef struct {
@@ -50,10 +54,10 @@ void servo_init(void);
 void servo_set_angle(float angle);
 
 // Encoder functions
-void update_encoder_counts(void);
-void reset_encoder_counts(void);
+void     update_encoder_counts(void);
+void     reset_encoder_counts(void);
 uint32_t get_encoder_pulses(void);
-void print_encoder_status(void);
+void     print_encoder_status(void);
 
 // Obstacle detection
 bool obstacle_detected(float distance_cm);
@@ -61,7 +65,8 @@ bool object_too_close(float distance_cm);
 bool object_at_stop_distance(float distance_cm);
 
 // Object scanning
-float calculate_object_width(float distance_left, float distance_right, float servo_angle_left, float servo_angle_right);
+float calculate_object_width(float distance_left, float distance_right, float servo_angle_left,
+                             float servo_angle_right);
 ObjectScanResult scan_object_width(void);
 
 // Turning functions
@@ -87,8 +92,8 @@ void obstacle_avoidance_test(void);
 void calibrate_turning_pulses(void);
 
 // Add these function declarations to Obstacle_Avoidance.h
-void follow_line_simple(void);
-void set_motor_speeds_pid(uint16_t ir_value);
+void  follow_line_simple(void);
+void  set_motor_speeds_pid(uint16_t ir_value);
 float pid_calculation(uint16_t ir_value);
 
 // Add these to Obstacle_Avoidance.h
@@ -97,6 +102,6 @@ void avoid_obstacle_only(void);
 // Add these to Obstacle_Avoidance.h
 float get_current_speed_cm_s(void);
 float get_total_distance_cm(void);
-void update_speed_and_distance(void);
+void  update_speed_and_distance(void);
 float get_heading_fast(float* direction);
 #endif

@@ -1,4 +1,7 @@
-// Remove the polling functions and add interrupt-based ones
+/**
+ * motor_encoder_demo.h - Header file for motor control and encoder accumulation.
+ */
+
 #ifndef MOTOR_ENCODER_DEMO_H
 #define MOTOR_ENCODER_DEMO_H
 

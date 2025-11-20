@@ -6,7 +6,7 @@
 // #include "lwip/dns.h"
 // #include "lwip/ip_addr.h"
 
-// #include <inttypes.h> 
+// #include <inttypes.h>
 
 // // ======= Wi-Fi credentials =======
 // #define WIFI_SSID      "Fata nos in unum"
@@ -37,7 +37,8 @@
 //     printf("[MQTT] Incoming publish on topic: %s (len=%"PRIu32")\n", topic, tot_len);
 // }
 
-// static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
+// static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status)
+// {
 //     if (status == MQTT_CONNECT_ACCEPTED) {
 //         g_mqtt_connected = true;
 //         printf("[MQTT] conn status=%d\n", status);
@@ -107,7 +108,8 @@
 
 // bool mqtt_is_connected(void) { return g_mqtt_connected; }
 
-// void mqtt_publish_telemetry(float speed, float distance_cm, float yaw_deg, float ultra_cm, const char* state) {
+// void mqtt_publish_telemetry(float speed, float distance_cm, float yaw_deg, float ultra_cm, const
+// char* state) {
 //     if (!g_client || !g_mqtt_connected) return;
 
 //     char topic[128];
@@ -125,7 +127,7 @@
 //                              1 /*QoS1*/, 0 /*retain*/, NULL, NULL);
 
 //     cyw43_arch_lwip_end();
-    
+
 //     if (err != ERR_OK) {
 //         printf("[MQTT] publish err=%d\n", err);
 //     }
@@ -139,84 +141,91 @@
 // }
 
 // mqtt_client.c — Pico W + FreeRTOS (sys_freertos) safe MQTT helper
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
-#include <inttypes.h>
 
-#include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
+#include "pico/stdlib.h"
+
+/**
+ * mqtt_client.c - MQTT client implementation for WiFi telemetry and control.
+ */
 
 #include "lwip/apps/mqtt.h"
-#include "lwip/ip_addr.h"
 #include "lwip/dns.h"
 #include "lwip/err.h"
+#include "lwip/ip_addr.h"
 
 #include "mqtt_client.h"
 
 #include "FreeRTOS.h"
-#include "task.h"
-#include "lwip/netif.h"
 #include "lwip/ip4_addr.h"
+#include "lwip/netif.h"
+#include "task.h"
 
 // ---------- User/Build configuration (can be -D… in CMake) ----------
 #ifndef WIFI_SSID
-#define WIFI_SSID       "YOUR_SSID"
+#define WIFI_SSID "YOUR_SSID"
 #endif
 #ifndef WIFI_PASSWORD
-#define WIFI_PASSWORD   "YOUR_PASSWORD"
+#define WIFI_PASSWORD "YOUR_PASSWORD"
 #endif
 #ifndef BROKER_IP
 // Plain TCP MQTT broker on your laptop / Raspberry Pi etc.
-#define BROKER_IP       "192.168.1.10"
+#define BROKER_IP "192.168.1.10"
 #endif
 #ifndef BASE_TOPIC
-#define BASE_TOPIC      "robot/alpha"
+#define BASE_TOPIC "robot/alpha"
 #endif
 #ifndef MQTT_PORT
-#define MQTT_PORT       1883
+#define MQTT_PORT 1883
 #endif
 #ifndef MQTT_CLIENT_ID
-#define MQTT_CLIENT_ID  "pico-car"
+#define MQTT_CLIENT_ID "pico-car"
 #endif
 #ifndef MQTT_KEEPALIVE_S
 #define MQTT_KEEPALIVE_S 60
 #endif
 // --------------------------------------------------------------------
 
-static mqtt_client_t *g_client = NULL;
-static volatile bool g_mqtt_connected = false;
+static mqtt_client_t* g_client         = NULL;
+static volatile bool  g_mqtt_connected = false;
 
 // Forward
-static void mqtt_conn_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status);
-static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len);
-static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t flags);
+static void mqtt_conn_cb(mqtt_client_t* client, void* arg, mqtt_connection_status_t status);
+static void mqtt_incoming_publish_cb(void* arg, const char* topic, u32_t tot_len);
+static void mqtt_incoming_data_cb(void* arg, const u8_t* data, u16_t len, u8_t flags);
 
-static void log_ip(const char *label, const ip_addr_t *ip) {
+static void log_ip(const char* label, const ip_addr_t* ip)
+{
     printf("%s %s\n", label, ipaddr_ntoa(ip));
 }
 
-bool mqtt_is_connected(void) {
+bool mqtt_is_connected(void)
+{
     return g_mqtt_connected;
 }
 
 /* =============================
  * MQTT incoming handlers
  * ============================= */
-static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len) {
+static void mqtt_incoming_publish_cb(void* arg, const char* topic, u32_t tot_len)
+{
     // This callback runs in the lwIP TCPIP thread
     printf("[MQTT] <- PUBLISH topic=\"%s\" len=%" PRIu32 "\n", topic ? topic : "(null)", tot_len);
 }
 
-static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t flags) {
+static void mqtt_incoming_data_cb(void* arg, const u8_t* data, u16_t len, u8_t flags)
+{
     // This callback runs in the lwIP TCPIP thread
     static char buf[384];
-    size_t n = (len < sizeof(buf) - 1) ? len : sizeof(buf) - 1;
+    size_t      n = (len < sizeof(buf) - 1) ? len : sizeof(buf) - 1;
     memcpy(buf, data, n);
     buf[n] = '\0';
     printf("[MQTT] <- DATA: %s%s\n", buf, (flags & MQTT_DATA_FLAG_LAST) ? " [LAST]" : "");
     // Parse commands here if you want (e.g. {"type":"barcode","value":"LEFT"})
 }
-
 
 /* =============================
  * MQTT connection callback
@@ -225,7 +234,8 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
 //     printf("[MQTT] conn cb status=%d\n", status);
 //     // This callback runs in the lwIP TCPIP thread (already inside the lock)
 //     if (status == MQTT_CONNECT_ACCEPTED) {
-//          printf("[MQTT] CONNECTED (keepalive=%d, clientId=%s)\n", MQTT_KEEPALIVE_S, MQTT_CLIENT_ID);
+//          printf("[MQTT] CONNECTED (keepalive=%d, clientId=%s)\n", MQTT_KEEPALIVE_S,
+//          MQTT_CLIENT_ID);
 //         // g_mqtt_connected = true;
 //         // printf("[MQTT] CONNECTED (status=%d)\n", status);
 
@@ -254,7 +264,8 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
 //     }
 // }
 
-static void mqtt_conn_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
+static void mqtt_conn_cb(mqtt_client_t* client, void* arg, mqtt_connection_status_t status)
+{
     printf("[MQTT] conn cb status=%d\n", status);
     if (status == MQTT_CONNECT_ACCEPTED) {
         g_mqtt_connected = true;
@@ -267,8 +278,9 @@ static void mqtt_conn_cb(mqtt_client_t *client, void *arg, mqtt_connection_statu
         printf("[MQTT] subscribe %s => err=%d\n", topic, (int)e);
 
         // Optional: retained diag so web can see the device is online
-        const char *diag = "{\"hello\":\"pico-online\"}";
-        char dtopic[128]; snprintf(dtopic, sizeof(dtopic), "%s/diag", BASE_TOPIC);
+        const char* diag = "{\"hello\":\"pico-online\"}";
+        char        dtopic[128];
+        snprintf(dtopic, sizeof(dtopic), "%s/diag", BASE_TOPIC);
         cyw43_arch_lwip_begin();
         err_t de = mqtt_publish(client, dtopic, diag, (u16_t)strlen(diag), 0, 1, NULL, NULL);
         cyw43_arch_lwip_end();
@@ -281,11 +293,11 @@ static void mqtt_conn_cb(mqtt_client_t *client, void *arg, mqtt_connection_statu
     }
 }
 
-
 /* =============================
  * Public: connect Wi-Fi + MQTT
  * ============================= */
-bool wifi_and_mqtt_start(void) {
+bool wifi_and_mqtt_start(void)
+{
     // Init CYW43 and lwIP/FreeRTOS integration
     printf("ATTEMPTING WIFI AND MQTT START\n");
     if (cyw43_arch_init()) {
@@ -296,10 +308,9 @@ bool wifi_and_mqtt_start(void) {
 
     printf("[CFG] BROKER_IP macro: %s\n", BROKER_IP);
 
-
     printf("[NET] Connecting Wi-Fi SSID=\"%s\"…\n", WIFI_SSID);
-    int r = cyw43_arch_wifi_connect_timeout_ms(
-        WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 10000000);
+    int r = cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK,
+                                               10000000);
     if (r) {
         printf("[NET] Wi-Fi connect failed (err=%d)\n", r);
         return false;
@@ -351,7 +362,8 @@ bool wifi_and_mqtt_start(void) {
  * ============================= */
 // void mqtt_publish_telemetry(float speed, float distance_cm, float yaw_deg,
 //                             float ultra_cm, const char *state) {
-//     if (!g_client || !g_mqtt_connected) { printf("[MQTT] skip publish (not connected)\n"); return; }
+//     if (!g_client || !g_mqtt_connected) { printf("[MQTT] skip publish (not connected)\n");
+//     return; }
 
 //     char topic[128];
 //     char payload[256];
@@ -404,11 +416,12 @@ bool wifi_and_mqtt_start(void) {
 //     }
 // }
 
-void mqtt_publish_telemetry(float speed, float distance_cm, float yaw_deg,
-                            float ultra_cm, const char *state) {
-    if (!g_client || !g_mqtt_connected) { 
-        printf("[MQTT] skip publish (not connected)\n"); 
-        return; 
+void mqtt_publish_telemetry(float speed, float distance_cm, float yaw_deg, float ultra_cm,
+                            const char* state)
+{
+    if (!g_client || !g_mqtt_connected) {
+        printf("[MQTT] skip publish (not connected)\n");
+        return;
     }
 
     char topic[128];
@@ -428,8 +441,8 @@ void mqtt_publish_telemetry(float speed, float distance_cm, float yaw_deg,
 
     // Single publish under lwIP lock
     cyw43_arch_lwip_begin();
-    err_t e = mqtt_publish(g_client, topic, payload, (u16_t)strlen(payload),
-                           1 /*QoS1*/, 0 /*retain*/, NULL, NULL);
+    err_t e = mqtt_publish(g_client, topic, payload, (u16_t)strlen(payload), 1 /*QoS1*/,
+                           0 /*retain*/, NULL, NULL);
     cyw43_arch_lwip_end();
 
     if (e != ERR_OK) {
@@ -439,21 +452,22 @@ void mqtt_publish_telemetry(float speed, float distance_cm, float yaw_deg,
     }
 }
 
-
 /* =============================
  * Optional: non-RTOS polling
  * (not needed for sys_freertos,
  *  but kept to match header)
  * ============================= */
-void mqtt_loop_poll(void) {
+void mqtt_loop_poll(void)
+{
     // With pico_cyw43_arch_lwip_sys_freertos, lwIP runs on its own thread.
     // Nothing to do here; brief sleep to yield CPU if someone calls it anyway.
     sleep_ms(1);
 }
 // Add to mqtt_client.c
-static void wifi_connect_task(void *pvParameters) {
+static void wifi_connect_task(void* pvParameters)
+{
     printf("[NET] WiFi connection task started\n");
-    
+
     if (cyw43_arch_init()) {
         printf("[NET] cyw43_arch_init failed\n");
         vTaskDelete(NULL);
@@ -462,9 +476,9 @@ static void wifi_connect_task(void *pvParameters) {
     cyw43_arch_enable_sta_mode();
 
     printf("[NET] Connecting Wi-Fi...\n");
-    int r = cyw43_arch_wifi_connect_timeout_ms(
-        WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 15000); // 15 second timeout
-    
+    int r = cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK,
+                                               15000); // 15 second timeout
+
     if (r) {
         printf("[NET] Wi-Fi connect failed (err=%d)\n", r);
         cyw43_arch_deinit();
@@ -472,24 +486,20 @@ static void wifi_connect_task(void *pvParameters) {
         printf("[NET] Wi-Fi connected successfully\n");
         // Optionally start MQTT connection here
     }
-    
+
     vTaskDelete(NULL);
 }
 
 // Modified wifi_and_mqtt_start that doesn't block
-bool wifi_and_mqtt_start_nonblocking(void) {
+bool wifi_and_mqtt_start_nonblocking(void)
+{
     // Start WiFi in background task
-    if (xTaskCreate(
-        wifi_connect_task,
-        "WiFi_Conn",
-        2048,
-        NULL,
-        tskIDLE_PRIORITY,  // Low priority - don't block robot
-        NULL
-    ) != pdPASS) {
+    if (xTaskCreate(wifi_connect_task, "WiFi_Conn", 2048, NULL,
+                    tskIDLE_PRIORITY, // Low priority - don't block robot
+                    NULL) != pdPASS) {
         printf("[NET] Failed to create WiFi task\n");
         return false;
     }
-    
+
     return true; // Return immediately - WiFi will connect in background
 }
