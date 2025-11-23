@@ -40,21 +40,53 @@ typedef struct {
 } pid_state_t;
 
 // Function declarations
+// Initialize IMU, filters and PID structures for movement control.
 void imu_movement_init(void);
+
+// Read the latest IMU orientation and acceleration into the struct.
+// Returns true if new data was read successfully.
 bool read_imu_data(imu_data_t *data);
+
+// Print IMU data over serial (debug use only).
 void print_imu_data(const imu_data_t *data);
+
+// Initialize PID configuration and state structures to default values.
 void pid_controller_init(pid_config_t *config, pid_state_t *state);
-float pid_controller_update(float current_yaw, pid_config_t *config, pid_state_t *state);
-float progressive_pid_controller_update(float current_yaw, pid_config_t *config, pid_state_t *state);
-void drive_to_yaw_setpoint(float current_yaw, pid_config_t *config, pid_state_t *state, float *pid_output, float *left_speed, float *right_speed);
-pid_config_t* get_pid_config(void);
-pid_state_t* get_pid_state(void);
+
+// Standard PID update: compute correction based on current yaw and internal state.
+float pid_controller_update(float current_yaw,
+                            pid_config_t *config,
+                            pid_state_t *state);
+
+// PID update with progressive / adaptive gains for smoother turning.
+float progressive_pid_controller_update(float current_yaw,
+                                        pid_config_t *config,
+                                        pid_state_t *state);
+
+// Compute PID output and map it to left/right motor speeds to drive toward the setpoint.
+void drive_to_yaw_setpoint(float current_yaw,
+                           pid_config_t *config,
+                           pid_state_t *state,
+                           float *pid_output,
+                           float *left_speed,
+                           float *right_speed);
+
+// Accessors for the global PID configuration and state used by the movement task.
+pid_config_t *get_pid_config(void);
+pid_state_t  *get_pid_state(void);
+
+// Detect a stable initial yaw setpoint by averaging a number of samples.
+// Returns true once a reliable setpoint has been established.
 bool detect_initial_setpoint(int samples);
+
+// Manually set the yaw target (in degrees) for the PID controller.
 void set_yaw_setpoint(float target_yaw);
+
+// FreeRTOS task that continuously updates IMU-based movement and PID control.
 void imu_movement_task(void *params);
 
-// Speed and distance functions (same pattern as obstacle avoidance)
-void imu_speed_calc_init(void);
+// Speed and distance functions (computed using IMU + encoders)
+void imu_speed_calc_init(void);       // Reset timers and distance accumulators
 void imu_update_speed_and_distance(void);
 float imu_get_current_speed_cm_s(void);
 float imu_get_total_distance_cm(void);

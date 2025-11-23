@@ -83,20 +83,23 @@ void complete_avoidance_cycle(void);
 void line_follow_with_obstacle_avoidance(void);
 
 // Test functions
-void obstacle_avoidance_test(void);
-void calibrate_turning_pulses(void);
+void obstacle_avoidance_test(void);       // Standalone obstacle avoidance demo
+void calibrate_turning_pulses(void);      // Helper used to tune encoder pulse counts for turning
 
-// Add these function declarations to Obstacle_Avoidance.h
-void follow_line_simple(void);
+// Line-follow + PID helpers used by the integrated controller
+void follow_line_simple(void);            // Basic line following without obstacle logic
 void set_motor_speeds_pid(uint16_t ir_value);
-float pid_calculation(uint16_t ir_value);
+float pid_calculation(uint16_t ir_value); // Compute PID correction from IR sensor reading
 
-// Add these to Obstacle_Avoidance.h
-bool check_obstacle_detection(void);
-void avoid_obstacle_only(void);
-// Add these to Obstacle_Avoidance.h
+// High-level obstacle avoidance helpers
+bool check_obstacle_detection(void);      // Return true if an obstacle is detected by ultrasonic
+void avoid_obstacle_only(void);           // Run avoidance routine without line following
+
+// Shared telemetry helpers (speed / distance / heading)
 float get_current_speed_cm_s(void);
 float get_total_distance_cm(void);
 void update_speed_and_distance(void);
-float get_heading_fast(float* direction);
+float get_heading_fast(float *direction); // Get yaw from IMU and fill direction (LEFT/RIGHT)
+void speed_calc_init(void);
+void reset_total_distance(void);
 #endif

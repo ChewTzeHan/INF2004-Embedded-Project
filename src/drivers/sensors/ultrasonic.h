@@ -21,14 +21,30 @@ The function prototypes allow main.c to access the initialization and measuremen
 #define TRIG_PIN 0
 #define ECHO_PIN 1
 
-// Initializes GPIO pins used by the ultrasonic sensor
+/**
+ * @brief Configure TRIG and ECHO GPIO pins for the HC-SR04 sensor.
+ *
+ * Must be called once at startup before using any ultrasonic functions.
+ */
 void ultrasonic_init(void);
 
-// Sends trigger pulse and measures the distance in centimeters
+/**
+ * @brief Trigger up to a few measurement attempts and return the measured distance.
+ *
+ * Converts the echo pulse width into distance in centimetres.
+ * @return Measured distance in cm, or -1.0f if all attempts fail.
+ */
 float ultrasonic_get_distance_cm(void);
 
-
-// Add this function prototype to ultrasonic.h
+/**
+ * @brief Send a single trigger pulse. Mostly used internally by higher-level helpers.
+ */
 void ultrasonic_trigger_measurement(void);
+
+/**
+ * @brief Fast boolean check used by obstacle avoidance logic.
+ *
+ * @return true if an obstacle is within the configured detection range.
+ */
 bool ultrasonic_detect_obstacle_fast(void);
 #endif

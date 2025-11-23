@@ -4,6 +4,7 @@
 #include "pico/stdlib.h"
 #include "motor_encoder_demo.h"
 #include "ir_sensor.h"
+#include "log.h"
 
 // ==============================
 // PID CONSTANTS
@@ -18,7 +19,7 @@
 #define MAX_CORRECTION 17.5f  // Limit how much we can adjust speeds
 
 #define WHITE_THRESHOLD 300
-#define WHITE_RAMP_RATE 0.125f  // how quickly correction scales up per cycle (0.0–1.0)
+#define WHITE_RAMP_RATE 0.125f  // how quickly correction scales up per cycle (0.0-1.0)
 
 // Global variables for PID
 static int16_t previous_error = 0;
@@ -58,20 +59,15 @@ float pid_calculation(uint16_t ir_value) {
     // PID calculation
     float correction = (KP * error) + (KD * derivative);
     
-    
-
     //float correction = (KP * error) + (KD * derivative) + (KI * integral);
     // Limit correction
     if (correction > MAX_CORRECTION) correction = MAX_CORRECTION;
     if (correction < -MAX_CORRECTION) correction = -MAX_CORRECTION;
     
-    
-    
     // Update previous values
     previous_error = error;
     previous_time = current_time;
     
-
     if(ir_value > SETPOINT && previous_ir_value < SETPOINT){ //wrong, take previous correction
         correction = previous_correction;
     }
@@ -118,13 +114,12 @@ void set_motor_speeds_pid(uint16_t ir_value) {
     uint32_t current_time = time_us_32();
     
     if (current_time - last_print > 100000) { // Print every 100ms
-        printf("IR: %4u | Error: %4d | Correction: %6.2f\n | motor speeds: L=%.2f R=%.2f | ramp: %.2f\n", 
+        LOG_INFO("IR: %4u | Error: %4d | Correction: %6.2f\n | motor speeds: L=%.2f R=%.2f | ramp: %.2f\n", 
                ir_value, SETPOINT - ir_value, correction, left_speed, right_speed, white_ramp_factor);
         last_print = current_time;
     }
     // Set motor speeds
         drive_signed(left_speed, right_speed);
-    //drive_signed(BASE_SPEED_LEFT, BASE_SPEED_RIGHT);
 }
 
 // ==============================
@@ -136,11 +131,7 @@ void follow_line_simple(void) {
     uint16_t ir_value = ir_read_raw();
     
     // Set motor speeds based on PID
-    set_motor_speeds_pid(ir_value);
-    //drive_signed(10, 10);
-    // Print debug info
-    
-    
+    set_motor_speeds_pid(ir_value);   
 }
 
 #define param_kp 0.015f
@@ -219,7 +210,7 @@ void follow_line_simple_with_params(float base_left_speed, float base_right_spee
     
     static uint32_t last_print = 0;
     if (current_time - last_print > 100000) { // Print every 100ms
-        printf("IR: %4u | Error: %4d | Correction: %6.2f | Speeds: L=%.2f R=%.2f | Custom params: baseL=%.1f baseR=%.1f maxCorr=%.1f\n", 
+        LOG_INFO("IR: %4u | Error: %4d | Correction: %6.2f | Speeds: L=%.2f R=%.2f | Custom params: baseL=%.1f baseR=%.1f maxCorr=%.1f\n", 
                ir_value, SETPOINT - ir_value, correction, left_speed, right_speed, 
                base_left_speed, base_right_speed, max_correction);
         last_print = current_time;
@@ -234,17 +225,17 @@ void follow_line_simple_with_params(float base_left_speed, float base_right_spee
 // ==============================
 
 void line_follow_test(void) {
-    printf("\n=== PID LINE FOLLOWING TEST ===\n");
-    printf("Initializing motors and sensors...\n");
+    LOG_INFO("\n=== PID LINE FOLLOWING TEST ===\n");
+    LOG_INFO("Initializing motors and sensors...\n");
     
     // Initialize motors and IR sensor
     motor_encoder_init();
     ir_init(NULL);
     
-    printf("PID Constants: Kp=%.3f, Kd=%.3f\n", KP, KD);
-    printf("Base Speed: %.1f%%, Setpoint: %d\n", BASE_SPEED_LEFT, SETPOINT);
-    printf("IR Range: 0-4095 (0=black, 4095=white)\n");
-    printf("Starting PID line following...\n\n");
+    LOG_INFO("PID Constants: Kp=%.3f, Kd=%.3f\n", KP, KD);
+    LOG_INFO("Base Speed: %.1f%%, Setpoint: %d\n", BASE_SPEED_LEFT, SETPOINT);
+    LOG_INFO("IR Range: 0-4095 (0=black, 4095=white)\n");
+    LOG_INFO("Starting PID line following...\n\n");
     
     // Initialize previous_time
     previous_time = time_us_32();
@@ -255,17 +246,3 @@ void line_follow_test(void) {
         sleep_ms(50); // 40Hz update rate
     }
 }
-
-// ==============================
-// MAIN FUNCTION
-// ==============================
-
-// int main(void) {
-//     stdio_init_all();
-//     sleep_ms(4000);
-    
-//     printf("\n=== PID Line Following Robot ===\n");
-//     line_follow_test();
-    
-//     return 0;
-// }

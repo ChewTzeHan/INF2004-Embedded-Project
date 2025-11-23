@@ -202,7 +202,7 @@
       if(!obj) return;
       if('speed' in obj) { ui.speed.textContent = obj.speed + ' cm/s'; ui.speedSrc.textContent = 'telemetry'; }
       if('distance' in obj) { ui.distance.textContent = obj.distance + ' cm'; ui.distanceSrc.textContent = 'telemetry'; }
-      if('imu' in obj && obj.imu){ if('yaw' in obj.imu){ ui.yaw.textContent = obj.imu.yaw.toFixed(1) + '°'; ui.yawSrc.textContent = 'telemetry'; }}
+      if('imu' in obj && obj.imu){ if('yaw' in obj.imu){ ui.yaw.textContent = obj.imu.yaw.toFixed(1) + ' deg'; ui.yawSrc.textContent = 'telemetry'; }}
       if('ir_raw' in obj){ ui.line.textContent = obj.ir_raw; ui.lineSrc.textContent = 'telemetry'; }
       if('ultra_cm' in obj){ ui.ultra.textContent = obj.ultra_cm.toFixed(1) + ' cm'; ui.ultraPill.textContent = (obj.ultra_cm>0 && obj.ultra_cm<30? 'OBSTACLE':'CLEAR'); ui.ultraPill.className = 'pill ' + (obj.ultra_cm>0 && obj.ultra_cm<30? 'bad':'ok'); }
       if('state' in obj){ ui.state.textContent = obj.state; ui.statePill.textContent = 'telemetry'; }
@@ -242,7 +242,7 @@
         if(topic === t.tele){ const obj = parseMaybeJSON(payload); applyTelemetry(obj); return; }
         if(topic === t.speed){ ui.speed.textContent = payload + ' cm/s'; ui.speedSrc.textContent = 'topic'; return; }
         if(topic === t.distance){ ui.distance.textContent = payload + ' cm'; ui.distanceSrc.textContent = 'topic'; return; }
-        if(topic === t.yaw){ ui.yaw.textContent = Number(payload).toFixed(1) + '°'; ui.yawSrc.textContent = 'topic'; return; }
+        if(topic === t.yaw){ ui.yaw.textContent = Number(payload).toFixed(1) + ' deg'; ui.yawSrc.textContent = 'topic'; return; }
         if(topic === t.ir || topic === t.linePos){ ui.line.textContent = payload; ui.lineSrc.textContent = 'topic'; return; }
         if(topic === t.ultra){ const cm = parseFloat(payload); ui.ultra.textContent = cm.toFixed(1) + ' cm'; const alarm = cm>0 && cm<30; ui.ultraPill.textContent = alarm? 'OBSTACLE':'CLEAR'; ui.ultraPill.className = 'pill ' + (alarm? 'bad':'ok'); return; }
         if(topic === t.state){ ui.state.textContent = payload; ui.statePill.textContent = 'topic'; return; }

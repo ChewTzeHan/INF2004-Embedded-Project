@@ -96,7 +96,7 @@
 /* ================================
  * Memory / pools / pbufs
  * ================================ */
-/* Grow the lwIP heap to avoid “pool empty” panics under load */
+/* Grow the lwIP heap to avoid "pool empty" panics under load */
 #undef  MEM_SIZE
 #define MEM_SIZE                    24000  /* 24 KB for lwIP heap */
 

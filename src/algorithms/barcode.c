@@ -4,6 +4,7 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
+#include "log.h"
 #include "barcode.h"
 #include "ir_sensor.h"
 
@@ -77,7 +78,7 @@ static void barcode_gpio_isr(uint gpio, uint32_t events) {
     if (s_count < MAX_TRANSITIONS) {
         s_durations[s_count++] = dt;
     } else {
-        // Buffer full → mark ready; stop capture
+        // Buffer full -> mark ready; stop capture
         s_frame_ready = true;
         s_capturing = false;
     }
@@ -87,10 +88,7 @@ void barcode_init(void) {
     // Initialize digital IR sensor
     ir_digital_init();
     
-    // Setup interrupt-based capture
-    //barcode_irq_init();
-    
-    printf("Barcode: Digital IR sensor initialized on GPIO%d\n", RIGHT_IR_DIGITAL_PIN);
+    LOG_INFO("Barcode: Digital IR sensor initialized on GPIO%d\n", RIGHT_IR_DIGITAL_PIN);
 }
 
 void barcode_irq_init(void) {
@@ -102,7 +100,7 @@ void barcode_irq_init(void) {
     gpio_set_irq_enabled_with_callback(RIGHT_IR_DIGITAL_PIN, 
                                       GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, 
                                       true, &barcode_gpio_isr);
-    printf("Barcode: IRQ capture armed on GPIO%u\n", RIGHT_IR_DIGITAL_PIN);
+    LOG_INFO("Barcode: IRQ capture armed on GPIO%u\n", RIGHT_IR_DIGITAL_PIN);
 }
 
 // Call periodically (e.g., in a 30 ms timer) to finalize capture on quiet time
@@ -163,7 +161,6 @@ static width_t classify_width(uint32_t dur_us, uint32_t narrow_us) {
     float ratio = (float)dur_us / narrow_us;
     
     // More lenient thresholds for Code39
-    //if (ratio < 0.3f) return WIDTH_BAD;      // Too short
     if (ratio < 3.0f) return WIDTH_NARROW;   // 0.3x to 2.0x = Narrow
     if (ratio > 3.0f) return WIDTH_WIDE;     // 2.0x to 5.0x = Wide
     return WIDTH_BAD;                         // Too long
@@ -299,7 +296,6 @@ bool barcode_scan_digital(barcode_result_t *result) {
     uint32_t w0 = time_us_32();
     while ((time_us_32() - w0) < 300000) {
         bool current_state = ir_read_digital();
-        // printf("%d", current_state);
         if (current_state != last_state) {
             last_state = current_state;
             break;
@@ -347,17 +343,9 @@ barcode_command_t barcode_parse_command(const char *s) {
 }
 
 
-// Debug version to see real-time bar scanning
-// Improved scanning function with better timing
-// Fixed scanning function - continues after first transition
-// Add this function to analyze the raw data
-
-// Update the decoding function to include analysis
-// Updated scanning function that removes the first invalid duration
-// New decoding function that skips every 10th element (inter-character gap)
-// Strict decoding function that follows the pattern: ignore 1, take 9, ignore 1, take 9, etc.
-// Clean decoding function that shows only the important information
-// Clean decoding function that shows each group clearly
+// Decode the timing array using Code39's 10-element groups.
+// We skip every 10th transition (inter-character gap) and map the
+// remaining 9 N/W widths to a symbol.
 static bool decode_with_intercharacter_gap(const uint32_t *dur, uint16_t n, barcode_result_t *result) {
     char chars[BARCODE_MAX_LENGTH + 4] = {0};
     uint8_t clen = 0;
@@ -365,27 +353,27 @@ static bool decode_with_intercharacter_gap(const uint32_t *dur, uint16_t n, barc
     uint32_t narrow = estimate_narrow_us(dur, n);
     if (narrow < 40 || narrow > 7000) return false;
 
-    printf("\n=== DECODING ===\n");
+    LOG_INFO("\n=== DECODING ===\n");
     
     // Convert entire dur array to N/W pattern
-    printf("Full pattern: ");
+    LOG_INFO("Full pattern: ");
     for (int i = 0; i < n && i < 60; i++) {
         width_t w = classify_width(dur[i], narrow);
-        printf("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
+        LOG_INFO("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
     }
-    printf("\n\n");
+    LOG_INFO("\n\n");
     
     int position = 1; // Start at position 1 (ignore position 0)
     int group_num = 1;
     
-    printf("GROUP DECODING:\n");
-    printf("===============\n");
+    LOG_INFO("GROUP DECODING:\n");
+    LOG_INFO("===============\n");
     
     while (position <= n - 9) {
         char pattern[10] = {0};
         bool valid_pattern = true;
         
-        printf("Group %d (positions %d-%d): ", group_num, position, position + 8);
+        LOG_INFO("Group %d (positions %d-%d): ", group_num, position, position + 8);
         
         // Take the next 9 elements
         for (int i = 0; i < 9; i++) {
@@ -400,7 +388,7 @@ static bool decode_with_intercharacter_gap(const uint32_t *dur, uint16_t n, barc
                 break;
             }
             pattern[i] = (w == WIDTH_NARROW) ? 'N' : 'W';
-            printf("%c", pattern[i]); // Show the pattern as we build it
+            LOG_INFO("%c", pattern[i]); // Show the pattern as we build it
         }
         
         if (valid_pattern) {
@@ -408,13 +396,13 @@ static bool decode_with_intercharacter_gap(const uint32_t *dur, uint16_t n, barc
             char c = code39_match_pattern(pattern);
             if (c != '?') {
                 chars[clen++] = c;
-                printf(" -> '%c' ✓\n", c);
+                LOG_INFO(" -> '%c' \n", c);
             } else {
-                printf(" -> INVALID (no match)\n");
+                LOG_INFO(" -> INVALID (no match)\n");
                 break;
             }
         } else {
-            printf(" -> INVALID (bad widths)\n");
+            LOG_INFO(" -> INVALID (bad widths)\n");
             break;
         }
         
@@ -426,10 +414,10 @@ static bool decode_with_intercharacter_gap(const uint32_t *dur, uint16_t n, barc
     }
     
     chars[clen] = '\0';
-    printf("\nRaw decoded string: %s\n", chars);
+    LOG_INFO("\nRaw decoded string: %s\n", chars);
     
     if (clen < 3) {
-        printf("FAIL: Not enough characters (%d), need at least 3\n", clen);
+        LOG_INFO("FAIL: Not enough characters (%d), need at least 3\n", clen);
         return false;
     }
     
@@ -444,49 +432,49 @@ static bool decode_with_intercharacter_gap(const uint32_t *dur, uint16_t n, barc
         result->length = (uint8_t)strnlen(result->data, BARCODE_MAX_LENGTH);
         result->valid = (result->length > 0);
         result->checksum_ok = checksum_ok;
-        printf("SUCCESS: Final result: '%s'\n", result->data);
+        LOG_INFO("SUCCESS: Final result: '%s'\n", result->data);
         return true;
     } else {
-        printf("FAIL: Code39 validation failed - missing start/stop '*' markers\n");
-        printf("Expected format: *DATA* but got: %s\n", chars);
+        LOG_INFO("FAIL: Code39 validation failed - missing start/stop '*' markers\n");
+        LOG_INFO("Expected format: *DATA* but got: %s\n", chars);
         return false;
     }
 }
 
 // Simplified analysis function
 void analyze_barcode_pattern(const uint32_t *dur, uint16_t n) {
-    printf("\n=== ANALYSIS ===\n");
+    LOG_INFO("\n=== ANALYSIS ===\n");
     
     uint32_t narrow_us = estimate_narrow_us(dur, n);
-    printf("Narrow width: %uus\n", narrow_us);
+    LOG_INFO("Narrow width: %uus\n", narrow_us);
     
     // Show full N/W pattern
-    printf("Full N/W pattern: ");
+    LOG_INFO("Full N/W pattern: ");
     for (int i = 0; i < n && i < 60; i++) {
         width_t width = classify_width(dur[i], narrow_us);
-        if (width == WIDTH_NARROW) printf("N");
-        else if (width == WIDTH_WIDE) printf("W");
-        else printf("?");
+        if (width == WIDTH_NARROW) LOG_INFO("N");
+        else if (width == WIDTH_WIDE) LOG_INFO("W");
+        else LOG_INFO("?");
     }
-    printf("\n");
+    LOG_INFO("\n");
     
     // Show the actual grouping that will be used
-    printf("\nGrouping strategy:\n");
-    printf("Ignored: [0]");
+    LOG_INFO("\nGrouping strategy:\n");
+    LOG_INFO("Ignored: [0]");
     int pos = 1;
     int group = 1;
     while (pos <= n - 9) {
-        printf("\nGroup %d:   [%d-%d] ", group, pos, pos + 8);
+        LOG_INFO("\nGroup %d:   [%d-%d] ", group, pos, pos + 8);
         // Show the actual pattern for this group
         for (int i = 0; i < 9 && (pos + i) < n; i++) {
             width_t w = classify_width(dur[pos + i], narrow_us);
-            printf("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
+            LOG_INFO("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
         }
         pos += 10;
         group++;
-        if (pos <= n) printf("\nIgnored: [%d]", pos - 1);
+        if (pos <= n) LOG_INFO("\nIgnored: [%d]", pos - 1);
     }
-    printf("\n");
+    LOG_INFO("\n");
 }
 // Clean main scanning function
 bool barcode_scan_digital_debug(barcode_result_t *result) {
@@ -499,15 +487,15 @@ bool barcode_scan_digital_debug(barcode_result_t *result) {
     uint32_t seg_start = time_us_32();
     uint32_t last_change = seg_start;
 
-    printf("\n=== SCANNING ===\n");
-    printf("Waiting for barcode...\n");
+    LOG_INFO("\n=== SCANNING ===\n");
+    LOG_INFO("Waiting for barcode...\n");
 
     // Wait for first transition
     uint32_t w0 = time_us_32();
     while ((time_us_32() - w0) < 5000000) {
         bool current_state = ir_read_digital();
         if (current_state != last_state) {
-            printf("First transition detected! Starting capture...\n");
+            LOG_INFO("First transition detected! Starting capture...\n");
             last_state = current_state;
             seg_start = time_us_32();
             last_change = time_us_32();
@@ -517,7 +505,7 @@ bool barcode_scan_digital_debug(barcode_result_t *result) {
     }
 
     if ((time_us_32() - w0) >= 5000000) {
-        printf("Timeout: No barcode detected\n");
+        LOG_INFO("Timeout: No barcode detected\n");
         return false;
     }
 
@@ -542,10 +530,10 @@ bool barcode_scan_digital_debug(barcode_result_t *result) {
         sleep_us(100);
     }
 
-    printf("Captured: %d transitions\n", n);
+    LOG_INFO("Captured: %d transitions\n", n);
 
     if (n < 20) {
-        printf("FAIL: Too few transitions: %d\n", n);
+        LOG_INFO("FAIL: Too few transitions: %d\n", n);
         return false;
     }
 
@@ -557,51 +545,9 @@ bool barcode_scan_digital_debug(barcode_result_t *result) {
         return true;
     }
     
-    printf("FAIL: No valid barcode decoded\n");
+    LOG_INFO("FAIL: No valid barcode decoded\n");
     return false;
 }
-
-// Updated main for digital testing
-// int main(void) {
-//     stdio_init_all();
-//     setvbuf(stdout, NULL, _IONBF, 0);
-
-//     printf("Digital Barcode standalone test starting...\n");
-
-//     // Initialize digital barcode reader
-//     barcode_init();
-
-//     while (1) {
-//         barcode_result_t res;
-        
-//         // Method 1: Use polling-based digital scan
-//         if (barcode_scan_digital(&res)) {
-//             printf("BARCODE: '%s' len=%u chk=%d t=%u us\n",
-//                    res.data, (unsigned)res.length, res.checksum_ok, (unsigned)res.scan_time_us);
-            
-//             // Parse command if it's a motion command
-//             barcode_command_t cmd = barcode_parse_command(res.data);
-//             if (cmd != BARCODE_CMD_UNKNOWN) {
-//                 printf("COMMAND: ");
-//                 switch (cmd) {
-//                     case BARCODE_CMD_LEFT: printf("LEFT\n"); break;
-//                     case BARCODE_CMD_RIGHT: printf("RIGHT\n"); break;
-//                     case BARCODE_CMD_STOP: printf("STOP\n"); break;
-//                     case BARCODE_CMD_FORWARD: printf("FORWARD\n"); break;
-//                     default: break;
-//                 }
-//             }
-//         } else {
-//             printf("No barcode detected\n");
-//         }
-//         sleep_ms(500);
-//     }
-
-//     return 0;
-// }
-
-// Updated main for real-time debugging
-// Diagnostic main to test the sensor
 
 // Test with inverted logic
 bool ir_read_digital_inverted(void) {
@@ -619,15 +565,15 @@ bool barcode_scan_digital_inverted(barcode_result_t *result) {
     uint32_t seg_start = time_us_32();
     uint32_t last_change = seg_start;
 
-    printf("\n=== Starting INVERTED barcode scan ===\n");
-    printf("Initial state: %d\n", last_state);
+    LOG_INFO("\n=== Starting INVERTED barcode scan ===\n");
+    LOG_INFO("Initial state: %d\n", last_state);
 
     // Wait for start condition
     uint32_t w0 = time_us_32();
     while ((time_us_32() - w0) < 300000) {
         bool current_state = ir_read_digital_inverted();
         if (current_state != last_state) {
-            printf("First transition detected! Starting capture...\n");
+            LOG_INFO("First transition detected! Starting capture...\n");
             last_state = current_state;
             break;
         }
@@ -645,23 +591,23 @@ bool barcode_scan_digital_inverted(barcode_result_t *result) {
             last_state = current_state;
             last_change = now;
 
-            printf("[%3d]: %5uus %s\n", n-1, duration, ((n-1) % 2 == 0) ? "BAR" : "SPACE");
+            LOG_INFO("[%3d]: %5uus %s\n", n-1, duration, ((n-1) % 2 == 0) ? "BAR" : "SPACE");
             
         } else {
             if ((time_us_32() - last_change) > BARCODE_QUIET_US) {
                 uint32_t now = time_us_32();
                 dur[n++] = now - seg_start;
-                printf("[%3d]: %5uus (FINAL QUIET)\n", n-1, now - seg_start);
+                LOG_INFO("[%3d]: %5uus (FINAL QUIET)\n", n-1, now - seg_start);
                 break;
             }
         }
         sleep_us(50);
     }
 
-    printf("=== Capture complete: %d transitions ===\n", n);
+    LOG_INFO("=== Capture complete: %d transitions ===\n", n);
 
     if (n < 20) {
-        printf("Too few transitions (%d)\n", n);
+        LOG_INFO("Too few transitions (%d)\n", n);
         return false;
     }
 
@@ -674,81 +620,6 @@ bool barcode_scan_digital_inverted(barcode_result_t *result) {
     return true;
 }
 
-// ==============================
-// BARCODE DETECTION TASK FUNCTION
-// ==============================
-// Clean main scanning function
-// bool barcode_scan_digital_debug(barcode_result_t *result) {
-//     memset(result, 0, sizeof(*result));
-//     uint32_t tstart = time_us_32();
-
-//     uint32_t dur[MAX_TRANSITIONS]; 
-//     uint16_t n = 0;
-//     bool last_state = ir_read_digital();
-//     uint32_t seg_start = time_us_32();
-//     uint32_t last_change = seg_start;
-
-//     printf("\n=== SCANNING ===\n");
-//     printf("Waiting for barcode...\n");
-
-//     // Wait for first transition
-//     uint32_t w0 = time_us_32();
-//     while ((time_us_32() - w0) < 5000000) {
-//         bool current_state = ir_read_digital();
-//         if (current_state != last_state) {
-//             printf("First transition detected! Starting capture...\n");
-//             last_state = current_state;
-//             seg_start = time_us_32();
-//             last_change = time_us_32();
-//             break;
-//         }
-//         sleep_us(1000);
-//     }
-
-//     if ((time_us_32() - w0) >= 5000000) {
-//         printf("Timeout: No barcode detected\n");
-//         return false;
-//     }
-
-//     // Capture transitions
-//     while (n < MAX_TRANSITIONS-1) {
-//         bool current_state = ir_read_digital();
-//         uint32_t now = time_us_32();
-        
-//         if (current_state != last_state) {
-//             uint32_t duration = now - seg_start;
-//             dur[n++] = duration;
-//             seg_start = now;
-//             last_state = current_state;
-//             last_change = now;
-//         } else {
-//             uint32_t quiet_time = now - last_change;
-//             if (n > 9 && quiet_time > 5000000) {
-//                 dur[n++] = now - seg_start;
-//                 break;
-//             }
-//         }
-//         sleep_us(100);
-//     }
-
-//     printf("Captured: %d transitions\n", n);
-
-//     if (n < 20) {
-//         printf("FAIL: Too few transitions: %d\n", n);
-//         return false;
-//     }
-
-//     // Analyze and decode
-//     analyze_barcode_pattern(dur, n);
-    
-//     if (decode_with_intercharacter_gap(dur, n, result)) {
-//         result->scan_time_us = time_us_32() - tstart;
-//         return true;
-//     }
-    
-//     printf("FAIL: No valid barcode decoded\n");
-//     return false;
-// }
 bool decode_from_black_bar(const uint32_t *dur, uint16_t n, barcode_result_t *result) {
     char chars[BARCODE_MAX_LENGTH + 4] = {0};
     uint8_t clen = 0;
@@ -756,28 +627,28 @@ bool decode_from_black_bar(const uint32_t *dur, uint16_t n, barcode_result_t *re
     uint32_t narrow = estimate_narrow_us(dur, n);
     if (narrow < 40 || narrow > 7000) return false;
 
-    printf("\n=== DECODING FROM BLACK BAR ===\n");
+    LOG_INFO("\n=== DECODING FROM BLACK BAR ===\n");
     
     // Show full pattern starting from black bar
-    printf("Full pattern (black first): ");
+    LOG_INFO("Full pattern (black first): ");
     for (int i = 0; i < n && i < 60; i++) {
         width_t w = classify_width(dur[i], narrow);
-        printf("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
+        LOG_INFO("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
     }
-    printf("\n\n");
+    LOG_INFO("\n\n");
     
     // Now we can start from position 0 since first element is a black bar
     int position = 0;
     int group_num = 1;
     
-    printf("GROUP DECODING (starting from black bar):\n");
-    printf("=========================================\n");
+    LOG_INFO("GROUP DECODING (starting from black bar):\n");
+    LOG_INFO("=========================================\n");
     
     while (position <= n - 9) {
         char pattern[10] = {0};
         bool valid_pattern = true;
         
-        printf("Group %d (positions %d-%d): ", group_num, position, position + 8);
+        LOG_INFO("Group %d (positions %d-%d): ", group_num, position, position + 8);
         
         // Take the next 9 elements starting from current position
         for (int i = 0; i < 9; i++) {
@@ -792,7 +663,7 @@ bool decode_from_black_bar(const uint32_t *dur, uint16_t n, barcode_result_t *re
                 break;
             }
             pattern[i] = (w == WIDTH_NARROW) ? 'N' : 'W';
-            printf("%c", pattern[i]);
+            LOG_INFO("%c", pattern[i]);
         }
         
         if (valid_pattern) {
@@ -800,13 +671,13 @@ bool decode_from_black_bar(const uint32_t *dur, uint16_t n, barcode_result_t *re
             char c = code39_match_pattern(pattern);
             if (c != '?') {
                 chars[clen++] = c;
-                printf(" -> '%c' ✓\n", c);
+                LOG_INFO(" -> '%c' \n", c);
             } else {
-                printf(" -> INVALID (no match)\n");
+                LOG_INFO(" -> INVALID (no match)\n");
                 break;
             }
         } else {
-            printf(" -> INVALID (bad widths)\n");
+            LOG_INFO(" -> INVALID (bad widths)\n");
             break;
         }
         
@@ -818,10 +689,10 @@ bool decode_from_black_bar(const uint32_t *dur, uint16_t n, barcode_result_t *re
     }
     
     chars[clen] = '\0';
-    printf("\nRaw decoded string: %s\n", chars);
+    LOG_INFO("\nRaw decoded string: %s\n", chars);
     
     if (clen < 3) {
-        printf("FAIL: Not enough characters (%d), need at least 3\n", clen);
+        LOG_INFO("FAIL: Not enough characters (%d), need at least 3\n", clen);
         return false;
     }
     
@@ -836,11 +707,11 @@ bool decode_from_black_bar(const uint32_t *dur, uint16_t n, barcode_result_t *re
         result->length = (uint8_t)strnlen(result->data, BARCODE_MAX_LENGTH);
         result->valid = (result->length > 0);
         result->checksum_ok = checksum_ok;
-        printf("SUCCESS: Final result: '%s'\n", result->data);
+        LOG_INFO("SUCCESS: Final result: '%s'\n", result->data);
         return true;
     } else {
-        printf("FAIL: Code39 validation failed - missing start/stop '*' markers\n");
-        printf("Expected format: *DATA* but got: %s\n", chars);
+        LOG_INFO("FAIL: Code39 validation failed - missing start/stop '*' markers\n");
+        LOG_INFO("Expected format: *DATA* but got: %s\n", chars);
         return false;
     }
 }
@@ -850,31 +721,31 @@ bool decode_with_sliding_window(const uint32_t *dur, uint16_t n, barcode_result_
     uint32_t narrow = estimate_narrow_us(dur, n);
     //if (narrow < 40 || narrow > 7000) return false;
 
-    printf("\n=== SLIDING WINDOW DECODING ===\n");
-    printf("Total transitions: %d, Narrow width: %uus\n", n, narrow);
+    LOG_INFO("\n=== SLIDING WINDOW DECODING ===\n");
+    LOG_INFO("Total transitions: %d, Narrow width: %uus\n", n, narrow);
     
     // Show full pattern
-    printf("Full N/W pattern: ");
+    LOG_INFO("Full N/W pattern: ");
     for (int i = 0; i < n && i < 60; i++) {
         width_t w = classify_width(dur[i], narrow);
-        printf("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
+        LOG_INFO("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
     }
-    printf("\n\n");
+    LOG_INFO("\n\n");
 
     // Buffer to collect all decoded characters
     char decoded_chars[256] = {0};
     int decoded_index = 0;
     int valid_decodes_count = 0;
     
-    printf("SLIDING WINDOW ANALYSIS:\n");
-    printf("========================\n");
+    LOG_INFO("SLIDING WINDOW ANALYSIS:\n");
+    LOG_INFO("========================\n");
     
     // Slide through all possible 9-element windows
     for (int start_pos = 0; start_pos <= n - 9; start_pos++) {
         char pattern[10] = {0};
         bool valid_pattern = true;
         
-        printf("Window [%2d-%2d]: ", start_pos, start_pos + 8);
+        LOG_INFO("Window [%2d-%2d]: ", start_pos, start_pos + 8);
         
         // Build pattern from current window
         for (int i = 0; i < 9; i++) {
@@ -884,14 +755,14 @@ bool decode_with_sliding_window(const uint32_t *dur, uint16_t n, barcode_result_
                 break;
             }
             pattern[i] = (w == WIDTH_NARROW) ? 'N' : 'W';
-            printf("%c", pattern[i]);
+            LOG_INFO("%c", pattern[i]);
         }
         
         if (valid_pattern) {
             pattern[9] = '\0';
             char c = code39_match_pattern(pattern);
             if (c != '?') {
-                printf(" -> '%c' ✓\n", c);
+                LOG_INFO(" -> '%c' \n", c);
                 
                 // Store this decoded character
                 if (decoded_index < (int)sizeof(decoded_chars) - 2) {
@@ -954,28 +825,28 @@ bool decode_with_sliding_window(const uint32_t *dur, uint16_t n, barcode_result_
                             result->length = (uint8_t)strnlen(result->data, BARCODE_MAX_LENGTH);
                             result->valid = (result->length > 0);
                             result->checksum_ok = checksum_ok;
-                            printf("PRIMARY RESULT: '%s' (checksum: %s)\n", result->data, checksum_ok ? "OK" : "FAIL");
+                            LOG_INFO("PRIMARY RESULT: '%s' (checksum: %s)\n", result->data, checksum_ok ? "OK" : "FAIL");
                         }
                     }
                 }
             } else {
-                printf(" -> NO MATCH\n");
+                LOG_INFO(" -> NO MATCH\n");
             }
         } else {
-            printf(" -> INVALID WIDTHS\n");
+            LOG_INFO(" -> INVALID WIDTHS\n");
         }
     }
     
     // Store all decoded values for telemetry
     if (decoded_index > 0) {
         decoded_chars[decoded_index - 1] = '\0'; // Remove trailing space
-        snprintf(all_decoded_values, decoded_size, "ALL_DECODES: %s", decoded_chars);
+        snLOG_INFO(all_decoded_values, decoded_size, "ALL_DECODES: %s", decoded_chars);
     } else {
-        snprintf(all_decoded_values, decoded_size, "ALL_DECODES: NONE");
+        snLOG_INFO(all_decoded_values, decoded_size, "ALL_DECODES: NONE");
     }
     
-    printf("\n%s\n", all_decoded_values);
-    printf("Total valid character decodes: %d\n", valid_decodes_count);
+    LOG_INFO("\n%s\n", all_decoded_values);
+    LOG_INFO("Total valid character decodes: %d\n", valid_decodes_count);
     
     // If we found valid decodes but no complete Code39 string, use the first character
     if (valid_decodes_count > 0 && !result->valid) {
@@ -984,7 +855,7 @@ bool decode_with_sliding_window(const uint32_t *dur, uint16_t n, barcode_result_
         result->length = 1;
         result->valid = true;
         result->checksum_ok = false;
-        printf("USING SINGLE CHARACTER: '%c'\n", result->data[0]);
+        LOG_INFO("USING SINGLE CHARACTER: '%c'\n", result->data[0]);
     }
     
     return result->valid;
@@ -992,30 +863,30 @@ bool decode_with_sliding_window(const uint32_t *dur, uint16_t n, barcode_result_
 
 // Updated analysis function for sliding window
 void analyze_barcode_pattern_sliding(const uint32_t *dur, uint16_t n) {
-    printf("\n=== SLIDING WINDOW ANALYSIS ===\n");
+    LOG_INFO("\n=== SLIDING WINDOW ANALYSIS ===\n");
     
     uint32_t narrow_us = estimate_narrow_us(dur, n);
-    printf("Narrow width: %uus\n", narrow_us);
-    printf("Total transitions: %d\n", n);
+    LOG_INFO("Narrow width: %uus\n", narrow_us);
+    LOG_INFO("Total transitions: %d\n", n);
     
     // Show full N/W pattern
-    printf("Full N/W pattern: ");
+    LOG_INFO("Full N/W pattern: ");
     for (int i = 0; i < n && i < 60; i++) {
         width_t width = classify_width(dur[i], narrow_us);
-        if (width == WIDTH_NARROW) printf("N");
-        else if (width == WIDTH_WIDE) printf("W");
-        else printf("?");
+        if (width == WIDTH_NARROW) LOG_INFO("N");
+        else if (width == WIDTH_WIDE) LOG_INFO("W");
+        else LOG_INFO("?");
     }
-    printf("\n");
+    LOG_INFO("\n");
     
-    printf("\nPossible 9-element windows:\n");
+    LOG_INFO("\nPossible 9-element windows:\n");
     for (int start = 0; start <= n - 9; start++) {
-        printf("Window [%2d]: ", start);
+        LOG_INFO("Window [%2d]: ", start);
         for (int i = 0; i < 9; i++) {
             width_t w = classify_width(dur[start + i], narrow_us);
-            printf("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
+            LOG_INFO("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
         }
-        printf("\n");
+        LOG_INFO("\n");
     }
 }
 // Updated barcode_scan_while_moving function to start on first black bar
@@ -1038,23 +909,23 @@ bool barcode_scan_while_moving(barcode_result_t *result, char *nw_pattern, size_
     uint32_t seg_start = time_us_32();
     uint32_t last_change = seg_start;
 
-    printf("\n=== SCANNING WHILE MOVING (MANUAL TESTING) ===\n");
-    printf("Starting barcode capture - ROBOT MOVEMENT DISABLED\n");
+    LOG_INFO("\n=== SCANNING WHILE MOVING (MANUAL TESTING) ===\n");
+    LOG_INFO("Starting barcode capture - ROBOT MOVEMENT DISABLED\n");
 
     // PHASE 1: Wait until we're positioned on the FIRST BLACK BAR
-    printf("PHASE 1: Positioning on first black bar (MANUAL POSITIONING REQUIRED)...\n");
+    LOG_INFO("PHASE 1: Positioning on first black bar (MANUAL POSITIONING REQUIRED)...\n");
     uint32_t position_start_time = time_us_32();
     bool found_black_bar = false;
     
     while ((time_us_32() - position_start_time) < 2000000) {
         //follow_line_simple_with_params(32.5, 30, 10.5);
         drive_signed(25*1.25,25); // Slow forward to help with manual positioning
-        printf("Waiting for black bar detection... (current state: %d)\n", ir_read_digital());
+        LOG_INFO("Waiting for black bar detection... (current state: %d)\n", ir_read_digital());
         
         bool current_state = ir_read_digital();
         
         if (current_state) {
-            printf("✓ Positioned on first black bar! Starting capture...\n");
+            LOG_INFO("Positioned on first black bar! Starting capture...\n");
             found_black_bar = true;
             last_state = current_state;
             seg_start = time_us_32();
@@ -1066,18 +937,18 @@ bool barcode_scan_while_moving(barcode_result_t *result, char *nw_pattern, size_
     }
 
     if (!found_black_bar) {
-        printf("✗ Timeout: Could not position on first black bar\n");
+        LOG_INFO("Timeout: Could not position on first black bar\n");
         return false;
     }
 
     // PHASE 2: Capture transitions starting from black bar
-    printf("PHASE 2: Capturing transitions starting from black bar...\n");
+    LOG_INFO("PHASE 2: Capturing transitions starting from black bar...\n");
     uint32_t capture_start_time = time_us_32();
     const uint32_t MAX_CAPTURE_TIME_US = 5000000;
 
     while (n < MAX_TRANSITIONS-1) {
         if ((time_us_32() - capture_start_time) > MAX_CAPTURE_TIME_US) {
-            printf("MAX CAPTURE TIME REACHED (5s) - Stopping capture\n");
+            LOG_INFO("MAX CAPTURE TIME REACHED (5s) - Stopping capture\n");
             dur[n++] = time_us_32() - seg_start;
             all_stop();
             sleep_ms(3000);
@@ -1098,13 +969,13 @@ bool barcode_scan_while_moving(barcode_result_t *result, char *nw_pattern, size_
             
             if (n <= 10) {
                 const char* element_type = (n % 2 == 1) ? "BAR" : "SPACE";
-                printf("[CAPTURE %d]: %5uus %s\n", n-1, duration, element_type);
+                LOG_INFO("[CAPTURE %d]: %5uus %s\n", n-1, duration, element_type);
             }
         } else {
             uint32_t quiet_time = now - last_change;
             if ((n > 15 && quiet_time > 750000) || n > 30) {
                 dur[n++] = now - seg_start;
-                printf("Quiet period detected, ending capture. Total transitions: %d\n", n);
+                LOG_INFO("Quiet period detected, ending capture. Total transitions: %d\n", n);
                 all_stop();
                 sleep_ms(3000);
                 break;
@@ -1113,18 +984,14 @@ bool barcode_scan_while_moving(barcode_result_t *result, char *nw_pattern, size_
         sleep_us(10);
     }
 
-    printf("Capture complete: %d transitions\n", n);
-
-    // if (n < 20) {
-    //     printf("FAIL: Too few transitions: %d\n", n);
-    // }
+    LOG_INFO("Capture complete: %d transitions\n", n);
 
     // Generate N/W pattern from captured durations
     uint32_t narrow = estimate_narrow_us(dur, n);
     int pattern_index = 0;
     int timing_index = 0;
     
-    printf("Generated N/W pattern: ");
+    LOG_INFO("Generated N/W pattern: ");
     for (int i = 0; i < n && i < 60 && pattern_index < (pattern_size - 1); i++) {
         width_t width = classify_width(dur[i], narrow);
         if (width == WIDTH_NARROW) {
@@ -1134,64 +1001,64 @@ bool barcode_scan_while_moving(barcode_result_t *result, char *nw_pattern, size_
         } else {
             nw_pattern[pattern_index++] = '?';
         }
-        printf("%c", nw_pattern[i]);
+        LOG_INFO("%c", nw_pattern[i]);
     }
-    printf("\n");
+    LOG_INFO("\n");
     nw_pattern[pattern_index] = '\0';
 
     // Build timing array string
-    timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, "[");
+    timing_index += snLOG_INFO(timing_str + timing_index, timing_size - timing_index, "[");
     for (int i = 0; i < n && i < 20 && timing_index < (timing_size - 10); i++) {
         if (i > 0) {
-            timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, ",");
+            timing_index += snLOG_INFO(timing_str + timing_index, timing_size - timing_index, ",");
         }
-        timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, "%u", dur[i]);
+        timing_index += snLOG_INFO(timing_str + timing_index, timing_size - timing_index, "%u", dur[i]);
     }
-    timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, "]");
+    timing_index += snLOG_INFO(timing_str + timing_index, timing_size - timing_index, "]");
 
     // DEBUG: Print the captured pattern for analysis
-    printf("\n=== DEBUG: CAPTURED PATTERN ANALYSIS ===\n");
-    printf("Pattern length: %d\n", n);
-    printf("N/W Pattern: %s\n", nw_pattern);
+    LOG_INFO("\n=== DEBUG: CAPTURED PATTERN ANALYSIS ===\n");
+    LOG_INFO("Pattern length: %d\n", n);
+    LOG_INFO("N/W Pattern: %s\n", nw_pattern);
     
     // Use ONLY sliding window decoding
     char all_decoded_values[256] = {0};
     
-    printf("\n=== CALLING SLIDING WINDOW DECODER (ONLY METHOD) ===\n");
+    LOG_INFO("\n=== CALLING SLIDING WINDOW DECODER (ONLY METHOD) ===\n");
     bool decode_success = decode_with_sliding_window(dur, n, result, all_decoded_values, sizeof(all_decoded_values));
-    printf("Sliding window decode result: %s\n", decode_success ? "SUCCESS" : "FAILED");
+    LOG_INFO("Sliding window decode result: %s\n", decode_success ? "SUCCESS" : "FAILED");
     
     if (decode_success) {
         result->scan_time_us = time_us_32() - tstart;
         
         // INFER DIRECTION FROM DECODED LETTER
         char decoded_letter = result->data[0];
-        printf("Primary decoded letter: '%c'\n", decoded_letter);
+        LOG_INFO("Primary decoded letter: '%c'\n", decoded_letter);
         
         const char *right_letters = "ACEGIKMOQSUWY";
         
         if (strchr(right_letters, decoded_letter) != NULL) {
-            snprintf(direction_str, direction_size, "RIGHT");
-            printf("INFERRED DIRECTION: RIGHT (letter '%c')\n", decoded_letter);
+            snLOG_INFO(direction_str, direction_size, "RIGHT");
+            LOG_INFO("INFERRED DIRECTION: RIGHT (letter '%c')\n", decoded_letter);
         } else {
-            snprintf(direction_str, direction_size, "LEFT");
-            printf("INFERRED DIRECTION: LEFT (letter '%c')\n", decoded_letter);
+            snLOG_INFO(direction_str, direction_size, "LEFT");
+            LOG_INFO("INFERRED DIRECTION: LEFT (letter '%c')\n", decoded_letter);
         }
         
         // Create state string with ALL decoded values for telemetry
         char state[512];
-        snprintf(state, sizeof(state), 
+        snLOG_INFO(state, sizeof(state), 
                  "DECODED: %s | DIRECTION: %s | %s | PATTERN: %s | TIMING: %s", 
                  result->data, direction_str, all_decoded_values, nw_pattern, timing_str);
         
         mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, state);
         
-        printf("TELEMETRY SENT: %s\n", state);
+        LOG_INFO("TELEMETRY SENT: %s\n", state);
         
         return true;
     }
     
-    printf("SLIDING WINDOW DECODING FAILED - setting default output 'B'\n");
+    LOG_INFO("SLIDING WINDOW DECODING FAILED - setting default output 'B'\n");
     
     // SET DEFAULT OUTPUT 'B' WHEN NO BARCODE DECODED
     strncpy(result->data, "B", BARCODE_MAX_LENGTH);
@@ -1200,12 +1067,12 @@ bool barcode_scan_while_moving(barcode_result_t *result, char *nw_pattern, size_
     result->checksum_ok = false;
     result->scan_time_us = time_us_32() - tstart;
     
-    snprintf(direction_str, direction_size, "LEFT");
-    printf("DEFAULT DIRECTION: LEFT (letter 'B')\n");
+    snLOG_INFO(direction_str, direction_size, "LEFT");
+    LOG_INFO("DEFAULT DIRECTION: LEFT (letter 'B')\n");
     
     // Send failure telemetry
     char state[512];
-    snprintf(state, sizeof(state), 
+    snLOG_INFO(state, sizeof(state), 
              "DECODED: B | DIRECTION: LEFT | METHOD: DEFAULT | PATTERN: %s | TIMING: %s", 
              nw_pattern, timing_str);
     mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, state);
@@ -1219,37 +1086,37 @@ bool barcode_scan_while_moving(barcode_result_t *result, char *nw_pattern, size_
 
 // Updated analysis function for black-first pattern
 void analyze_barcode_pattern_black_first(const uint32_t *dur, uint16_t n) {
-    printf("\n=== ANALYSIS (Black First) ===\n");
+    LOG_INFO("\n=== ANALYSIS (Black First) ===\n");
     
     uint32_t narrow_us = estimate_narrow_us(dur, n);
-    printf("Narrow width: %uus\n", narrow_us);
+    LOG_INFO("Narrow width: %uus\n", narrow_us);
     
     // Show full N/W pattern
-    printf("Full N/W pattern (black first): ");
+    LOG_INFO("Full N/W pattern (black first): ");
     for (int i = 0; i < n && i < 60; i++) {
         width_t width = classify_width(dur[i], narrow_us);
-        if (width == WIDTH_NARROW) printf("N");
-        else if (width == WIDTH_WIDE) printf("W");
-        else printf("?");
+        if (width == WIDTH_NARROW) LOG_INFO("N");
+        else if (width == WIDTH_WIDE) LOG_INFO("W");
+        else LOG_INFO("?");
     }
-    printf("\n");
+    LOG_INFO("\n");
     
     // Show the grouping that will be used
-    printf("\nGrouping strategy (starting from black bar):\n");
+    LOG_INFO("\nGrouping strategy (starting from black bar):\n");
     int pos = 0;
     int group = 1;
     while (pos <= n - 9) {
-        printf("Group %d: [%d-%d] ", group, pos, pos + 8);
+        LOG_INFO("Group %d: [%d-%d] ", group, pos, pos + 8);
         // Show the actual pattern for this group
         for (int i = 0; i < 9 && (pos + i) < n; i++) {
             width_t w = classify_width(dur[pos + i], narrow_us);
-            printf("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
+            LOG_INFO("%c", (w == WIDTH_NARROW) ? 'N' : (w == WIDTH_WIDE) ? 'W' : '?');
         }
-        printf("\n");
+        LOG_INFO("\n");
         pos += 9; // No need to skip elements now
         group++;
     }
-    printf("\n");
+    LOG_INFO("\n");
 }
 
 // ==============================
@@ -1277,7 +1144,7 @@ void barcode_speed_calc_init(void) {
     g_barcode_current_speed_cm_s = 0.0f;
     g_barcode_total_distance_cm = 0.0f;
     g_barcode_last_distance_cm = 0.0f;
-    printf("[BARCODE_SPEED_CALC] Initialized with interrupt-based encoders\n");
+    LOG_INFO("[BARCODE_SPEED_CALC] Initialized with interrupt-based encoders\n");
 }
 
 void barcode_update_speed_and_distance(void) {
@@ -1315,7 +1182,7 @@ void barcode_update_speed_and_distance(void) {
     g_barcode_total_distance_cm = current_distance;
     
     // Debug output (optional - can be commented out)
-    printf("[BARCODE_SPEED] dist_traveled=%.2fcm, time=%.3fs, speed=%.2fcm/s\n", 
+    LOG_INFO("[BARCODE_SPEED] dist_traveled=%.2fcm, time=%.3fs, speed=%.2fcm/s\n", 
            distance_traveled, time_elapsed_s, g_barcode_current_speed_cm_s);
     
     // Update for next calculation
@@ -1339,7 +1206,7 @@ void barcode_reset_total_distance(void) {
     encoder_reset_distance(ENCODER_LEFT_GPIO);
     encoder_reset_distance(ENCODER_RIGHT_GPIO);
     g_barcode_total_distance_cm = 0.0f;
-    printf("[BARCODE_SPEED_CALC] Total distance reset\n");
+    LOG_INFO("[BARCODE_SPEED_CALC] Total distance reset\n");
 }
 
 // float speed;
@@ -1351,26 +1218,11 @@ void barcode_reset_total_distance(void) {
 static void barcode_detection_task(void *pv) {
     setvbuf(stdout, NULL, _IONBF, 0);  // Make stdout non-blocking
     vTaskDelay(pdMS_TO_TICKS(1000));
-    // printf("\n=== BARCODE DETECTION TASK STARTED ===\n");
-    // printf("Behavior: Line follow while scanning barcodes with telemetry\n");
-    
-    // bool connected = false;
-    // int attempts = 0;
-    //init_start_button();
+
     if (!wifi_and_mqtt_start()) {
-        printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
+        LOG_INFO("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
     }
 
-    // wifi_and_mqtt_start_nonblocking();
-
-    // if (!connected) {
-    //     printf("[NET] Wi-Fi/MQTT start failed after %d attempts (continuing without MQTT)\n", 
-    //            MAX_CONNECTION_ATTEMPTS);
-    // } else {
-    //     printf("[NET] Wi-Fi/MQTT connected successfully\n");
-    // }
-    
-    // printf("[NET] Local IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
     mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, "SYSTEM STARTING");
     sleep_ms(1000);
     
@@ -1378,11 +1230,11 @@ static void barcode_detection_task(void *pv) {
     motor_encoder_init();
 
     ir_init(NULL);
-    printf("huh?\n");
+    LOG_INFO("huh?\n");
     barcode_init();
     barcode_speed_calc_init();
     
-    printf("Starting line following with active barcode scanning and telemetry...\n");
+    LOG_INFO("Starting line following with active barcode scanning and telemetry...\n");
     sleep_ms(2000);
     bool system_active = true;
     bool scanning_active = false;
@@ -1395,34 +1247,23 @@ static void barcode_detection_task(void *pv) {
     mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, "SYSTEM READY");
 
     // INSERT GPIO21 BUTTON HERE TO START
-    //wait_for_start_button();
     while (system_active) {
         // Check if we should start scanning (black detected)
-        //bool current_state = ir_read_digital();
         bool current_state = true;
         barcode_update_speed_and_distance();
         if (current_state && !scanning_active && !junction_complete) { // Black detected and not already scanning
             scan_complete = false; // remove after done
             if(scan_complete) {
-                printf("Scan already completed, ignoring further black detections.\n");
+                LOG_INFO("Scan already completed, ignoring further black detections.\n");
                 all_stop();
                 sleep_ms(1500);
-                
-                // turn
-                // drive_signed(40, -40); //left turn
-                //sleep_ms(500);
-
-                // drive_signed(40, 40);
-                // sleep_ms(500);
-                // drive_signed(-40, 60); //right turn
-                // sleep_ms(500);
 
                 char decoded_letter = scan_result.data[0]; // Get the decoded letter
                 
 
                 // Create a string with the decoded letter for MQTT
                 char state_msg[50];
-                snprintf(state_msg, sizeof(state_msg), "DECODED_LETTER: %c", decoded_letter);
+                snLOG_INFO(state_msg, sizeof(state_msg), "DECODED_LETTER: %c", decoded_letter);
 
                 // Publish the decoded letter via MQTT
                 float speed = barcode_get_current_speed_cm_s();
@@ -1433,7 +1274,7 @@ static void barcode_detection_task(void *pv) {
                 
                 if (strchr(right_letters, decoded_letter) != NULL) {
                     // RIGHT turn
-                    printf("Executing RIGHT turn for letter '%c'\n", decoded_letter);
+                    LOG_INFO("Executing RIGHT turn for letter '%c'\n", decoded_letter);
                     drive_signed(40,40);
                     sleep_ms(500);
                     barcode_update_speed_and_distance();
@@ -1443,7 +1284,7 @@ static void barcode_detection_task(void *pv) {
                     
                 } else {
                     // LEFT turn (B, D, F, H, J, L, N, P, R, T, V, X, Z)
-                    printf("Executing LEFT turn for letter '%c'\n", decoded_letter);
+                    LOG_INFO("Executing LEFT turn for letter '%c'\n", decoded_letter);
                     drive_signed(40, -40); // Left turn
                     sleep_ms(500);
                     barcode_update_speed_and_distance();
@@ -1455,7 +1296,7 @@ static void barcode_detection_task(void *pv) {
                 junction_complete = true;
                 continue;
             }
-            printf("\n🎯 BLACK DETECTED - STARTING BARCODE SCAN!\n");
+            LOG_INFO("\nBLACK DETECTED - STARTING BARCODE SCAN!\n");
             scanning_active = true;
             scan_start_time = to_ms_since_boot(get_absolute_time());
             mqtt_publish_telemetry(0.0f, 0.0f, 0.0f, 0.0f, "BARCODE FOUND");
@@ -1463,7 +1304,7 @@ static void barcode_detection_task(void *pv) {
         
         if (scanning_active) {
             // Phase 2: Scanning mode - use dedicated scanning function that includes line following
-            printf("[SCAN MODE] Running barcode scan while continuing line following...\n");
+            LOG_INFO("[SCAN MODE] Running barcode scan while continuing line following...\n");
             // all_stop();
             // sleep_ms(500); // Brief stop before scanning
             // drive_signed(-30, -30); // Slow reverse to stabilize
@@ -1476,13 +1317,13 @@ static void barcode_detection_task(void *pv) {
             char direction_str[10]; // Buffer to store inferred direction
             
             if (barcode_scan_while_moving(&scan_result, nw_pattern, sizeof(nw_pattern), timing_str, sizeof(timing_str), direction_str, sizeof(direction_str))) {
-                printf("\n🎯 BARCODE SCANNED SUCCESSFULLY WHILE MOVING!\n");
-                printf("Data: '%s' (Length: %u, Checksum: %s)\n", 
+                LOG_INFO("\nBARCODE SCANNED SUCCESSFULLY WHILE MOVING!\n");
+                LOG_INFO("Data: '%s' (Length: %u, Checksum: %s)\n", 
                        scan_result.data, scan_result.length, scan_result.checksum_ok ? "OK" : "FAIL");
-                printf("Scan time: %u us\n", scan_result.scan_time_us);
-                printf("N/W Pattern: %s\n", nw_pattern);
-                printf("Timing Array: %s\n", timing_str);
-                printf("Inferred Direction: %s\n", direction_str);
+                LOG_INFO("Scan time: %u us\n", scan_result.scan_time_us);
+                LOG_INFO("N/W Pattern: %s\n", nw_pattern);
+                LOG_INFO("Timing Array: %s\n", timing_str);
+                LOG_INFO("Inferred Direction: %s\n", direction_str);
                 
                 // Send telemetry with decoded barcode data, timing information, AND inferred direction
                 uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -1491,7 +1332,7 @@ static void barcode_detection_task(void *pv) {
                     barcode_update_speed_and_distance();
                     // Create state string with decoded letters, pattern, timing, AND direction
                     char state[400]; // Larger buffer to accommodate all data
-                    snprintf(state, sizeof(state), 
+                    snLOG_INFO(state, sizeof(state), 
                              "DECODED: %s | DIRECTION: %s | PATTERN: %s | TIMING: %s", 
                              scan_result.data, direction_str, nw_pattern, timing_str);
                     
@@ -1499,10 +1340,10 @@ static void barcode_detection_task(void *pv) {
                     float distance = barcode_get_total_distance_cm();
                     // Publish telemetry with zeros for other values and comprehensive data as state
                     mqtt_publish_telemetry(speed, distance, 0.0f, 0.0f, state);
-                    printf("TELEMETRY SENT: Decoded barcode: %s\n", scan_result.data);
-                    printf("TELEMETRY SENT: Inferred direction: %s\n", direction_str);
-                    printf("TELEMETRY SENT: Pattern: %s\n", nw_pattern);
-                    printf("TELEMETRY SENT: Timing: %s\n", timing_str);
+                    LOG_INFO("TELEMETRY SENT: Decoded barcode: %s\n", scan_result.data);
+                    LOG_INFO("TELEMETRY SENT: Inferred direction: %s\n", direction_str);
+                    LOG_INFO("TELEMETRY SENT: Pattern: %s\n", nw_pattern);
+                    LOG_INFO("TELEMETRY SENT: Timing: %s\n", timing_str);
                 }
                 
                 // Optional: Execute the inferred direction command
@@ -1514,14 +1355,14 @@ static void barcode_detection_task(void *pv) {
                 }
                 
                 if (cmd != BARCODE_CMD_UNKNOWN) {
-                    printf("EXECUTING COMMAND: ");
+                    LOG_INFO("EXECUTING COMMAND: ");
                     switch (cmd) {
                         case BARCODE_CMD_LEFT: 
-                            printf("LEFT\n");
+                            LOG_INFO("LEFT\n");
                             // Add left turn execution here if needed
                             break;
                         case BARCODE_CMD_RIGHT: 
-                            printf("RIGHT\n");
+                            LOG_INFO("RIGHT\n");
                             // Add right turn execution here if needed
                             break;
                         default: break;
@@ -1531,7 +1372,7 @@ static void barcode_detection_task(void *pv) {
                 scanning_active = false;
                 scan_complete = true;
                 sleep_ms(3000);
-                printf("Returning to normal line following...\n");
+                LOG_INFO("Returning to normal line following...\n");
             } else {
                 // Scan failed - send telemetry with N/W pattern AND timing array
                 uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -1540,30 +1381,30 @@ static void barcode_detection_task(void *pv) {
                     
                     // Create state string with N/W pattern AND timing array
                     char state[400];
-                    snprintf(state, sizeof(state), 
+                    snLOG_INFO(state, sizeof(state), 
                              "SCAN_FAILED | PATTERN: %s | TIMING: %s", 
                              nw_pattern, timing_str);
                     strncpy(scan_result.data, "B", BARCODE_MAX_LENGTH);
                     float speed = barcode_get_current_speed_cm_s();
                     float distance = barcode_get_total_distance_cm();
                     mqtt_publish_telemetry(speed, distance, 0.0f, 0.0f, state);
-                    printf("TELEMETRY SENT: Scan failed - N/W Pattern: %s\n", nw_pattern);
-                    printf("TELEMETRY SENT: Scan failed - Timing Array: %s\n", timing_str);
+                    LOG_INFO("TELEMETRY SENT: Scan failed - N/W Pattern: %s\n", nw_pattern);
+                    LOG_INFO("TELEMETRY SENT: Scan failed - Timing Array: %s\n", timing_str);
                 }
                 
-                printf("Barcode scan failed or no barcode found\n");
-                printf("N/W Pattern captured: %s\n", nw_pattern);
-                printf("Timing Array: %s\n", timing_str);
+                LOG_INFO("Barcode scan failed or no barcode found\n");
+                LOG_INFO("N/W Pattern captured: %s\n", nw_pattern);
+                LOG_INFO("Timing Array: %s\n", timing_str);
                 scanning_active = false;
                 scan_complete = true;
                 sleep_ms(3000);
-                printf("Returning to normal line following...\n");
+                LOG_INFO("Returning to normal line following...\n");
             }
             
             // Check for overall scan timeout (safety)
             uint32_t current_time = to_ms_since_boot(get_absolute_time());
             if (current_time - scan_start_time > SCAN_TIMEOUT_MS) {
-                printf("Overall scan timeout after %lu ms\n", SCAN_TIMEOUT_MS);
+                LOG_INFO("Overall scan timeout after %lu ms\n", SCAN_TIMEOUT_MS);
                 strncpy(scan_result.data, "B", BARCODE_MAX_LENGTH);
                 scan_result.length = 1;
                 scan_result.valid = true;
@@ -1573,13 +1414,13 @@ static void barcode_detection_task(void *pv) {
                 if (mqtt_is_connected() && (current_time - g_last_pub_ms >= 500)) {
                     g_last_pub_ms = current_time;
                     char state[400];
-                    snprintf(state, sizeof(state), 
+                    snLOG_INFO(state, sizeof(state), 
                              "TIMEOUT | PATTERN: %s | TIMING: %s", 
                              nw_pattern, timing_str);
                     float speed = barcode_get_current_speed_cm_s();
                     float distance = barcode_get_total_distance_cm();
                     mqtt_publish_telemetry(speed, distance, 0.0f, 0.0f, state);
-                    printf("TELEMETRY SENT: Barcode scan timeout\n");
+                    LOG_INFO("TELEMETRY SENT: Barcode scan timeout\n");
                 }
                 
                 scanning_active = false;
@@ -1603,7 +1444,7 @@ static void barcode_detection_task(void *pv) {
             // Optional: Print status occasionally
             static uint32_t last_status_debug = 0;
             if (now - last_status_debug > 2000) { // Print every 2 seconds
-                printf("Line following normally - waiting for barcode...\n");
+                LOG_INFO("Line following normally - waiting for barcode...\n");
                 last_status_debug = now;
             }
         }
@@ -1612,7 +1453,7 @@ static void barcode_detection_task(void *pv) {
         vTaskDelay(pdMS_TO_TICKS(10)); // Shorter delay for more responsive scanning
     }
     
-    printf("\n=== BARCODE DETECTION COMPLETED ===\n");
+    LOG_INFO("\n=== BARCODE DETECTION COMPLETED ===\n");
     all_stop();
     vTaskDelete(NULL);
 }
@@ -1639,11 +1480,11 @@ bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t patter
     uint32_t seg_start = time_us_32();
     uint32_t last_change = seg_start;
 
-    printf("\n=== BARCODE SCAN WITH LINE FOLLOWING ===\n");
-    printf("Using slower line following for stable scanning...\n");
+    LOG_INFO("\n=== BARCODE SCAN WITH LINE FOLLOWING ===\n");
+    LOG_INFO("Using slower line following for stable scanning...\n");
 
     // Wait for first transition (black bar) while doing line following
-    printf("Waiting for first black bar with line following...\n");
+    LOG_INFO("Waiting for first black bar with line following...\n");
     uint32_t position_start_time = time_us_32();
     bool found_black_bar = false;
     
@@ -1654,7 +1495,7 @@ bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t patter
         bool current_state = ir_read_digital();
         
         if (current_state) { // Black detected
-            printf("✓ Positioned on first black bar! Starting capture...\n");
+            LOG_INFO("Positioned on first black bar! Starting capture...\n");
             found_black_bar = true;
             last_state = current_state;
             seg_start = time_us_32();
@@ -1665,19 +1506,19 @@ bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t patter
     }
 
     if (!found_black_bar) {
-        printf("✗ Timeout: Could not position on first black bar\n");
+        LOG_INFO("Timeout: Could not position on first black bar\n");
         all_stop();
         return false;
     }
 
     // Capture transitions while continuing line following
-    printf("Capturing barcode transitions with line following...\n");
+    LOG_INFO("Capturing barcode transitions with line following...\n");
     uint32_t capture_start_time = time_us_32();
     const uint32_t MAX_CAPTURE_TIME_US = 5000000;
 
     while (n < MAX_TRANSITIONS-1) {
         if ((time_us_32() - capture_start_time) > MAX_CAPTURE_TIME_US) {
-            printf("MAX CAPTURE TIME REACHED (5s)\n");
+            LOG_INFO("MAX CAPTURE TIME REACHED (5s)\n");
             dur[n++] = time_us_32() - seg_start;
             break;
         }
@@ -1698,13 +1539,13 @@ bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t patter
             // Optional: Print first few transitions for debugging
             if (n <= 10) {
                 const char* element_type = (n % 2 == 1) ? "BAR" : "SPACE";
-                printf("[CAPTURE %d]: %5uus %s\n", n-1, duration, element_type);
+                LOG_INFO("[CAPTURE %d]: %5uus %s\n", n-1, duration, element_type);
             }
         } else {
             uint32_t quiet_time = now - last_change;
             if ((n > 15 && quiet_time > 750000) || n > 30) {
                 dur[n++] = now - seg_start;
-                printf("Quiet period detected, ending capture. Total transitions: %d\n", n);
+                LOG_INFO("Quiet period detected, ending capture. Total transitions: %d\n", n);
                 break;
             }
         }
@@ -1712,7 +1553,7 @@ bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t patter
     }
 
     all_stop(); // Stop after capture is complete
-    printf("Capture complete: %d transitions\n", n);
+    LOG_INFO("Capture complete: %d transitions\n", n);
     sleep_ms(2000); // Stabilization delay
 
     // Generate N/W pattern
@@ -1733,14 +1574,14 @@ bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t patter
     nw_pattern[pattern_index] = '\0';
 
     // Build timing array string
-    timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, "[");
+    timing_index += snLOG_INFO(timing_str + timing_index, timing_size - timing_index, "[");
     for (int i = 0; i < n && i < 20 && timing_index < (timing_size - 10); i++) {
         if (i > 0) {
-            timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, ",");
+            timing_index += snLOG_INFO(timing_str + timing_index, timing_size - timing_index, ",");
         }
-        timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, "%u", dur[i]);
+        timing_index += snLOG_INFO(timing_str + timing_index, timing_size - timing_index, "%u", dur[i]);
     }
-    timing_index += snprintf(timing_str + timing_index, timing_size - timing_index, "]");
+    timing_index += snLOG_INFO(timing_str + timing_index, timing_size - timing_index, "]");
 
     // Use sliding window decoding
     char all_decoded_values[256] = {0};
@@ -1754,12 +1595,12 @@ bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t patter
         const char *right_letters = "ACEGIKMOQSUWY";
         
         if (strchr(right_letters, decoded_letter) != NULL) {
-            snprintf(direction_str, direction_size, "RIGHT");
+            snLOG_INFO(direction_str, direction_size, "RIGHT");
         } else {
-            snprintf(direction_str, direction_size, "LEFT");
+            snLOG_INFO(direction_str, direction_size, "LEFT");
         }
         
-        printf("✅ Barcode scan successful: '%s' -> %s\n", result->data, direction_str);
+        LOG_INFO("Barcode scan successful: '%s' -> %s\n", result->data, direction_str);
         return true;
     }
     
@@ -1769,38 +1610,8 @@ bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t patter
     result->valid = true;
     result->checksum_ok = false;
     result->scan_time_us = time_us_32() - tstart;
-    snprintf(direction_str, direction_size, "LEFT");
+    snLOG_INFO(direction_str, direction_size, "LEFT");
     
-    printf("⚠️ Barcode scan failed, using default: 'B' -> LEFT\n");
+    LOG_INFO("Barcode scan failed, using default: 'B' -> LEFT\n");
     return true;
 }
-// ==============================
-// MAIN FUNCTION FOR BARCODE DETECTION
-// ==============================
-
-// int main(void) {
-//     stdio_init_all();
-//     // sleep_ms(2000); // Wait for USB to initialize
-
-//     // printf("\n=== BARCODE DETECTION ROBOT ===\n");
-//     // printf("Starting barcode detection task...\n");
-
-//     // Create the barcode detection task
-//     xTaskCreate(
-//         barcode_detection_task, 
-//         "barcode_detection",
-//         4096,                  // stack size
-//         NULL,
-//         tskIDLE_PRIORITY + 2,  // priority
-//         NULL
-//     );
-
-//     // Start FreeRTOS scheduler
-//     vTaskStartScheduler();
-
-//     // Should never reach here
-//     while (1) {
-//     }
-    
-//     return 0;
-// }

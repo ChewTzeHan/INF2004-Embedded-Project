@@ -4,6 +4,7 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
+#include "log.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "imu_raw_demo.h"
@@ -91,7 +92,7 @@ void imu_init() {
     gpio_pull_up(I2C_SDA_PIN);
     gpio_pull_up(I2C_SCL_PIN);
 
-    printf("\n=== LSM303DLHC IMU Initialization ===\n");
+    LOG_INFO("\n=== LSM303DLHC IMU Initialization ===\n");
     
     uint8_t acc_config[] = {0x20, 0x27};
     i2c_write_blocking(I2C_INST, ACC_ADDR, acc_config, 2, false);
@@ -99,7 +100,7 @@ void imu_init() {
     uint8_t mag_config[] = {0x02, 0x00};
     i2c_write_blocking(I2C_INST, MAG_ADDR, mag_config, 2, false);
 
-    printf("IMU Ready (400kHz I2C)\n\n");
+    LOG_INFO("IMU Ready (400kHz I2C)\n\n");
 }
 
 // ========== Sensor Reading ==========
@@ -232,7 +233,7 @@ float get_heading_fast(float *direction_str) {
         heading_initialized = true;
         last_valid_heading = 0.0f;
         last_raw_heading = heading_raw;
-        printf("\n[INIT] Heading 0° = Current orientation (Baseline: %.2f)\n", mag_strength);
+        LOG_INFO("\n[INIT] Heading 0 deg = Current orientation (Baseline: %.2f)\n", mag_strength);
         return 0.0f;
     }
 
@@ -248,11 +249,11 @@ float get_heading_fast(float *direction_str) {
 
     if (angular_velocity > ANGULAR_VELOCITY_THRESHOLD) {
         alpha = has_interference ? 0.4f : 0.9f;
-        printf("[FAST] ");
+        LOG_INFO("[FAST] ");
         
     } else if (angular_velocity > STATIONARY_THRESHOLD) {
         alpha = has_interference ? 0.1f : 0.3f;
-        printf("[MED] ");
+        LOG_INFO("[MED] ");
         
     } else {
         alpha = has_interference ? 0.01f : 0.02f;
@@ -261,7 +262,7 @@ float get_heading_fast(float *direction_str) {
 
     // Only show interference warning occasionally
     if (has_interference) {
-        printf("[UNSTABLE] Mag=%.2f", mag_strength);  // Just a warning symbol
+        LOG_INFO("[UNSTABLE] Mag=%.2f", mag_strength);  // Just a warning symbol
     }
     
     // Apply exponential filter with adaptive alpha
@@ -287,7 +288,7 @@ float get_heading_fast(float *direction_str) {
 void reset_heading_reference() {
     heading_initialized = false;
     mag_samples_count = 0;
-    printf("\n[RESET] Heading reference reset\n");
+    LOG_INFO("\n[RESET] Heading reference reset\n");
 }
 
 // ========== Main Processing ==========
@@ -311,32 +312,32 @@ void compute_and_print_data(int16_t ax, int16_t ay, int16_t az) {
 
     bool is_jerky = (accel_change > JERK_THRESHOLD);
 
-    printf("\nAcc X:%6d Y:%6d Z:%6d | ", ax_filtered, ay_filtered, az_filtered);
-    printf("Heading:%6.1f° Pitch:%5.1f° Roll:%5.1f° | ", heading, pitch, roll);
-    printf("Jerk:%5.0f ", accel_change);
+    LOG_INFO("\nAcc X:%6d Y:%6d Z:%6d | ", ax_filtered, ay_filtered, az_filtered);
+    LOG_INFO("Heading:%6.1f deg Pitch:%5.1f deg Roll:%5.1f deg | ", heading, pitch, roll);
+    LOG_INFO("Jerk:%5.0f ", accel_change);
     
     if (direction > 0.5f) {
-        printf("CW↻  ");
+        LOG_INFO("CW ");
     } else if (direction < -0.5f) {
-        printf("CCW↺ ");
+        LOG_INFO("CCW ");
     } else {
-        printf("---  ");
+        LOG_INFO("---  ");
     }
 
     if (is_jerky) {
-        printf("[JERKY]");
+        LOG_INFO("[JERKY]");
     }
     
-    printf("\r");
+    LOG_INFO("\r");
     fflush(stdout);
 }
 
 // ========== Calibration ==========
 void simple_calibration() {
-    printf("\n=== MAGNETOMETER CALIBRATION ===\n");
-    printf("Slowly rotate IMU in all directions for 30 seconds\n");
-    printf("Cover all orientations with figure-8 motions\n");
-    printf("IMPORTANT: Do this in the same location where you'll use the IMU!\n\n");
+    LOG_INFO("\n=== MAGNETOMETER CALIBRATION ===\n");
+    LOG_INFO("Slowly rotate IMU in all directions for 30 seconds\n");
+    LOG_INFO("Cover all orientations with figure-8 motions\n");
+    LOG_INFO("IMPORTANT: Do this in the same location where you'll use the IMU!\n\n");
 
     int16_t min_x = 32767, max_x = -32768;
     int16_t min_y = 32767, max_y = -32768;
@@ -357,14 +358,14 @@ void simple_calibration() {
             if (mz > max_z) max_z = mz;
 
             if (samples % 10 == 0) {
-                printf("X[%5d,%5d] Y[%5d,%5d] Z[%5d,%5d] N=%d\r",
+                LOG_INFO("X[%5d,%5d] Y[%5d,%5d] Z[%5d,%5d] N=%d\r",
                        min_x, max_x, min_y, max_y, min_z, max_z, samples);
             }
         }
         sleep_ms(50);
     }
 
-    printf("\n\n=== CALIBRATION RESULTS ===\n");
+    LOG_INFO("\n\n=== CALIBRATION RESULTS ===\n");
     
     mag_cal.offset_x = (max_x + min_x) / 2.0f;
     mag_cal.offset_y = (max_y + min_y) / 2.0f;
@@ -374,73 +375,14 @@ void simple_calibration() {
     mag_cal.scale_y = (max_y - min_y) / 2.0f;
     mag_cal.scale_z = (max_z - min_z) / 2.0f;
 
-    printf("Hard Iron Offsets: X=%.1f, Y=%.1f, Z=%.1f\n", 
+    LOG_INFO("Hard Iron Offsets: X=%.1f, Y=%.1f, Z=%.1f\n", 
         mag_cal.offset_x, mag_cal.offset_y, mag_cal.offset_z);
-    printf("Soft Iron Scales: X=%.1f, Y=%.1f, Z=%.1f\n", 
+    LOG_INFO("Soft Iron Scales: X=%.1f, Y=%.1f, Z=%.1f\n", 
         mag_cal.scale_x, mag_cal.scale_y, mag_cal.scale_z);
     
-    printf("\n=== Update these values in your code: ===\n");
-    printf(".offset_x=%.1ff, .offset_y=%.1ff, .offset_z=%.1ff,\n",
+    LOG_INFO("\n=== Update these values in your code: ===\n");
+    LOG_INFO(".offset_x=%.1ff, .offset_y=%.1ff, .offset_z=%.1ff,\n",
            mag_cal.offset_x, mag_cal.offset_y, mag_cal.offset_z);
-    printf(".scale_x=%.1ff, .scale_y=%.1ff, .scale_z=%.1ff\n",
+    LOG_INFO(".scale_x=%.1ff, .scale_y=%.1ff, .scale_z=%.1ff\n",
            mag_cal.scale_x, mag_cal.scale_y, mag_cal.scale_z);
 }
-
-// // ========== Main ==========
-// int main(void) {
-//     stdio_init_all();
-//     imu_init();
-//     sleep_ms(2000);
-
-//     printf("\n=== ULTRA-FAST IMU HEADING TRACKER ===\n");
-//     printf("Features: 0.9 alpha during fast rotation = nearly instant response\n");
-//     printf("1 - Normal operation\n");
-//     printf("2 - Calibrate magnetometer\n");
-//     printf("Choice: ");
-
-//     while(getchar_timeout_us(0) != PICO_ERROR_TIMEOUT);
-
-//     absolute_time_t timeout = make_timeout_time_ms(5000);
-//     char choice = '1';
-
-//     while (absolute_time_diff_us(get_absolute_time(), timeout) > 0) {
-//         int ch = getchar_timeout_us(100000);
-//         if (ch != PICO_ERROR_TIMEOUT) {
-//             choice = (char)ch;
-//             break;
-//         }
-//     }
-
-//     printf("%c\n\n", choice);
-
-//     if (choice == '2') {
-//         simple_calibration();
-//         printf("\nPress any key to start...\n");
-//         while (getchar_timeout_us(1000000) == PICO_ERROR_TIMEOUT);
-//     }
-
-//     printf("\n=== OPERATION ===\n");
-//     printf("0° = Initial orientation (North)\n");
-//     printf("Rotation: CW increases (0°→90°→180°→270°→360°)\n");
-//     printf("Press 'R' to reset reference\n");
-//     printf("Watch for [INSTANT↻] = Ultra-fast tracking (alpha=0.9)\n");
-//     printf("Watch for [STABLE] = Stationary mode (heavy filtering)\n\n");
-
-//     sleep_ms(1000);
-
-//     while (true) {
-//         int16_t ax, ay, az;
-//         if (read_accel_raw(&ax, &ay, &az)) {
-//             compute_and_print_data(ax, ay, az);
-//         }
-
-//         int ch = getchar_timeout_us(0);
-//         if (ch == 'r' || ch == 'R') {
-//             reset_heading_reference();
-//         }
-
-//         sleep_ms(50);  // REDUCED from 100ms - doubles your sample rate!
-//     }
-
-//     return 0;
-// }

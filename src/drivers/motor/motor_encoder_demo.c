@@ -6,6 +6,7 @@
 #include "hardware/gpio.h"
 #include "hardware/adc.h"
 #include "pico/time.h"
+#include "log.h"
 
 /* ---------------- Pins (your wiring) ---------------- */
 #define M1A 9
@@ -81,7 +82,7 @@ void poll_encoders_during_test(uint32_t duration_ms) {
         // Print progress every 100ms
         uint32_t current_time = to_ms_since_boot(get_absolute_time());
         if (current_time - last_print_time >= 100) {
-            printf("Time: %.1fs - Encoder counts: Left=%lu, Right=%lu\r", 
+            LOG_INFO("Time: %.1fs - Encoder counts: Left=%lu, Right=%lu\r", 
                    (float)(current_time - to_ms_since_boot(start_time)) / 1000.0f,
                    E1.pulse_count, E2.pulse_count);
             last_print_time = current_time;
@@ -89,7 +90,7 @@ void poll_encoders_during_test(uint32_t duration_ms) {
         
         sleep_us(100); // Small delay to avoid overwhelming the CPU
     }
-    printf("\n");
+    LOG_INFO("\n");
 }
 
 /* ---------------- Motor encoder initialization ---------------- */
@@ -106,13 +107,13 @@ void motor_encoder_init(void) {
     gpio_set_dir(ENC2_DIG, GPIO_IN); 
     gpio_pull_up(ENC2_DIG);
 
-    printf("Motor system initialized (Polling-based encoder reading)\n");
+    LOG_INFO("Motor system initialized (Polling-based encoder reading)\n");
 }
 
 /* ---------------- Calibration function ---------------- */
 void calibrate_motors(void) {
-    printf("\n=== MOTOR CALIBRATION ===\n");
-    printf("Running both motors at 30%% speed for 2 seconds...\n\n");
+    LOG_INFO("\n=== MOTOR CALIBRATION ===\n");
+    LOG_INFO("Running both motors at 30%% speed for 2 seconds...\n\n");
     
     // Start both motors forward at 30% speed
     drive_signed(30.0f, 30.0f);
@@ -127,21 +128,21 @@ void calibrate_motors(void) {
     uint32_t left_count = E1.pulse_count;
     uint32_t right_count = E2.pulse_count;
     
-    printf("\n=== CALIBRATION RESULTS ===\n");
-    printf("Left motor encoder pulses:  %lu\n", left_count);
-    printf("Right motor encoder pulses: %lu\n", right_count);
+    LOG_INFO("\n=== CALIBRATION RESULTS ===\n");
+    LOG_INFO("Left motor encoder pulses:  %lu\n", left_count);
+    LOG_INFO("Right motor encoder pulses: %lu\n", right_count);
     
     // Calculate difference and compensation factors
     if (left_count == 0 || right_count == 0) {
-        printf("ERROR: One or both encoders recorded 0 pulses!\n");
-        printf("Check encoder wiring and connections.\n");
+        LOG_INFO("ERROR: One or both encoders recorded 0 pulses!\n");
+        LOG_INFO("Check encoder wiring and connections.\n");
         return;
     }
     
     int32_t difference = (int32_t)left_count - (int32_t)right_count;
     float difference_percent = ((float)difference / ((left_count + right_count) / 2.0f)) * 100.0f;
     
-    printf("Difference: %ld pulses (%.1f%%)\n", difference, difference_percent);
+    LOG_INFO("Difference: %ld pulses (%.1f%%)\n", difference, difference_percent);
     
     // Calculate compensation factors
     float left_compensation = 1.0f;
@@ -150,13 +151,13 @@ void calibrate_motors(void) {
     if (left_count > right_count) {
         // Left is faster, slow it down
         left_compensation = (float)right_count / (float)left_count;
-        printf("Left motor is faster - applying compensation factor: %.3f\n", left_compensation);
+        LOG_INFO("Left motor is faster - applying compensation factor: %.3f\n", left_compensation);
     } else if (right_count > left_count) {
         // Right is faster, slow it down  
         right_compensation = (float)left_count / (float)right_count;
-        printf("Right motor is faster - applying compensation factor: %.3f\n", right_compensation);
+        LOG_INFO("Right motor is faster - applying compensation factor: %.3f\n", right_compensation);
     } else {
-        printf("Motors are perfectly balanced! No compensation needed.\n");
+        LOG_INFO("Motors are perfectly balanced! No compensation needed.\n");
     }
     
     // Calculate recommended speeds for straight movement
@@ -164,54 +165,38 @@ void calibrate_motors(void) {
     float recommended_left = base_speed * left_compensation;
     float recommended_right = base_speed * right_compensation;
     
-    printf("\n=== RECOMMENDED SETTINGS ===\n");
-    printf("For straight movement at 30%% base speed:\n");
-    printf("Left motor:  %.1f%%\n", recommended_left);
-    printf("Right motor: %.1f%%\n", recommended_right);
+    LOG_INFO("\n=== RECOMMENDED SETTINGS ===\n");
+    LOG_INFO("For straight movement at 30%% base speed:\n");
+    LOG_INFO("Left motor:  %.1f%%\n", recommended_left);
+    LOG_INFO("Right motor: %.1f%%\n", recommended_right);
     
     // Show the compensation factors to use in code
-    printf("\nCompensation factors to use in your code:\n");
-    printf("LEFT_COMPENSATION  = %.3f\n", left_compensation);
-    printf("RIGHT_COMPENSATION = %.3f\n", right_compensation);
-    printf("\nUsage example:\n");
-    printf("drive_signed(desired_speed * LEFT_COMPENSATION, desired_speed * RIGHT_COMPENSATION);\n");
+    LOG_INFO("\nCompensation factors to use in your code:\n");
+    LOG_INFO("LEFT_COMPENSATION  = %.3f\n", left_compensation);
+    LOG_INFO("RIGHT_COMPENSATION = %.3f\n", right_compensation);
+    LOG_INFO("\nUsage example:\n");
+    LOG_INFO("drive_signed(desired_speed * LEFT_COMPENSATION, desired_speed * RIGHT_COMPENSATION);\n");
     
     // Verification test
-    printf("\n=== VERIFICATION TEST ===\n");
-    printf("Testing compensation with calculated speeds for 1 second...\n");
+    LOG_INFO("\n=== VERIFICATION TEST ===\n");
+    LOG_INFO("Testing compensation with calculated speeds for 1 second...\n");
     
     // Run with compensated speeds
     drive_signed(recommended_left, recommended_right);
     poll_encoders_during_test(1000);
     all_stop();
     
-    printf("Verification results:\n");
-    printf("Left encoder:  %lu pulses\n", E1.pulse_count);
-    printf("Right encoder: %lu pulses\n", E2.pulse_count);
+    LOG_INFO("Verification results:\n");
+    LOG_INFO("Left encoder:  %lu pulses\n", E1.pulse_count);
+    LOG_INFO("Right encoder: %lu pulses\n", E2.pulse_count);
     
     int32_t new_difference = (int32_t)E1.pulse_count - (int32_t)E2.pulse_count;
     float new_difference_percent = ((float)new_difference / ((E1.pulse_count + E2.pulse_count) / 2.0f)) * 100.0f;
-    printf("New difference: %ld pulses (%.1f%%)\n", new_difference, new_difference_percent);
+    LOG_INFO("New difference: %ld pulses (%.1f%%)\n", new_difference, new_difference_percent);
     
     if (abs(new_difference) < abs(difference) / 2) {
-        printf("✓ Compensation successful! Motors are more balanced.\n");
+        LOG_INFO("Compensation successful! Motors are more balanced.\n");
     } else {
-        printf("! Compensation may need further adjustment.\n");
+        LOG_INFO("Compensation may need further adjustment.\n");
     }
 }
-
-// int main() {
-//     stdio_init_all();
-//     sleep_ms(4000); // Wait for serial connection
-    
-//     printf("Motor Calibration Program (Polling Version)\n");
-    
-    
-//     motor_encoder_init();
-//     calibrate_motors();
-    
-//     printf("\nCalibration complete. Press any key to exit.\n");
-//     getchar();
-    
-//     return 0;
-// }

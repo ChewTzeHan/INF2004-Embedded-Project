@@ -3,6 +3,7 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
+#include "log.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "IMU_movement.h"
@@ -58,7 +59,7 @@ void imu_speed_calc_init(void) {
     g_imu_current_speed_cm_s = 0.0f;
     g_imu_total_distance_cm = 0.0f;
     g_imu_last_distance_cm = 0.0f;
-    printf("[IMU_SPEED_CALC] Initialized with interrupt-based encoders\n");
+    LOG_INFO("[IMU_SPEED_CALC] Initialized with interrupt-based encoders\n");
 }
 
 void imu_update_speed_and_distance(void) {
@@ -96,7 +97,7 @@ void imu_update_speed_and_distance(void) {
     g_imu_total_distance_cm = current_distance;
     
     // Debug output (optional - can be commented out)
-    printf("[IMU_SPEED] dist_traveled=%.2fcm, time=%.3fs, speed=%.2fcm/s\n", 
+    LOG_INFO("[IMU_SPEED] dist_traveled=%.2fcm, time=%.3fs, speed=%.2fcm/s\n", 
            distance_traveled, time_elapsed_s, g_imu_current_speed_cm_s);
     
     // Update for next calculation
@@ -120,7 +121,7 @@ void imu_reset_total_distance(void) {
     encoder_reset_distance(ENCODER_LEFT_GPIO);
     encoder_reset_distance(ENCODER_RIGHT_GPIO);
     g_imu_total_distance_cm = 0.0f;
-    printf("[IMU_SPEED_CALC] Total distance reset\n");
+    LOG_INFO("[IMU_SPEED_CALC] Total distance reset\n");
 }
 
 // ==============================
@@ -200,14 +201,14 @@ static void publish_imu_telemetry(const imu_data_t *data, float error, float pid
     char state[256]; // Increased buffer size to accommodate additional data
     
     if (pid_state.enabled && fabsf(error) > 1.0f) {
-        snprintf(state, sizeof(state), 
+        snLOG_INFO(state, sizeof(state), 
                  "adjusting: setpoint=%.1f, error=%.1f, pid=%.1f, L=%.1f, R=%.1f | "
                  "Accel Raw(X:%d Y:%d Z:%d) Filtered(X:%d Y:%d Z:%d)", 
                  pid_config.setpoint, error, pid_output, left_speed, right_speed,
                  ax_raw, ay_raw, az_raw,
                  ax_filtered, ay_filtered, az_filtered);
     } else {
-        snprintf(state, sizeof(state), 
+        snLOG_INFO(state, sizeof(state), 
                  "idle: setpoint=%.1f, error=%.1f, pid=%.1f, L=%.1f, R=%.1f | "
                  "Accel Raw(X:%d Y:%d Z:%d) Filtered(X:%d Y:%d Z:%d)", 
                  pid_config.setpoint, error, pid_output, left_speed, right_speed,
@@ -218,7 +219,7 @@ static void publish_imu_telemetry(const imu_data_t *data, float error, float pid
     // Publish telemetry via MQTT (same function call as obstacle avoidance)
     mqtt_publish_telemetry(speed, distance_cm, yaw_deg, ultra_cm, state);
     
-    printf("[IMU_MQTT] Published - Speed: %.2f cm/s, Distance: %.2f cm, Yaw: %.1f°, State: %s\n", 
+    LOG_INFO("[IMU_MQTT] Published - Speed: %.2f cm/s, Distance: %.2f cm, Yaw: %.1f deg, State: %s\n", 
            speed, distance_cm, yaw_deg, state);
 }
 
@@ -227,7 +228,7 @@ static void publish_imu_telemetry(const imu_data_t *data, float error, float pid
 // ==============================
 
 void imu_movement_init(void) {
-    printf("IMU Movement System Initializing...\n");
+    LOG_INFO("IMU Movement System Initializing...\n");
     
     // Initialize the existing IMU system
     imu_init();
@@ -235,13 +236,13 @@ void imu_movement_init(void) {
     // Initialize speed calculation system
     imu_speed_calc_init();
     
-    printf("IMU Movement System Ready\n");
-    printf("• Reading pitch, roll, yaw from accelerometer and magnetometer\n");
-    printf("• Using same I2C configuration as existing IMU system\n");
-    printf("• Data filtering applied for stable readings\n");
-    printf("• PID control using YAW angle for heading control\n");
-    printf("• Speed and distance tracking via encoders\n");
-    printf("• MQTT telemetry publishing enabled for yaw/heading, PID data, speed and distance\n\n");
+    LOG_INFO("IMU Movement System Ready\n");
+    LOG_INFO("- Reading pitch, roll, yaw from accelerometer and magnetometer\n");
+    LOG_INFO("- Using same I2C configuration as existing IMU system\n");
+    LOG_INFO("- Data filtering applied for stable readings\n");
+    LOG_INFO("- PID control using YAW angle for heading control\n");
+    LOG_INFO("- Speed and distance tracking via encoders\n");
+    LOG_INFO("- MQTT telemetry publishing enabled for yaw/heading, PID data, speed and distance\n\n");
 }
 
 // ==============================
@@ -308,21 +309,21 @@ bool read_imu_data(imu_data_t *data) {
 void print_imu_data(const imu_data_t *data) {
     if (data == NULL) return;
     
-    printf("[IMU] ");
-    printf("Pitch:%6.1f° ", data->pitch);
-    printf("Roll:%6.1f° ", data->roll);
-    printf("Yaw:%6.1f° ", data->yaw);
-    printf("\n");
-    printf("Accel(X:%5.2fg Y:%5.2fg Z:%5.2fg)", 
+    LOG_INFO("[IMU] ");
+    LOG_INFO("Pitch:%6.1f deg ", data->pitch);
+    LOG_INFO("Roll:%6.1f deg ", data->roll);
+    LOG_INFO("Yaw:%6.1f deg ", data->yaw);
+    LOG_INFO("\n");
+    LOG_INFO("Accel(X:%5.2fg Y:%5.2fg Z:%5.2fg)", 
            data->accel_x, data->accel_y, data->accel_z);
-    printf("\n");
+    LOG_INFO("\n");
     // Only print gyro if available
     if (data->gyro_x != 0 || data->gyro_y != 0 || data->gyro_z != 0) {
-        printf(" Gyro(X:%5.1f Y:%5.1f Z:%5.1f)", 
+        LOG_INFO(" Gyro(X:%5.1f Y:%5.1f Z:%5.1f)", 
                data->gyro_x, data->gyro_y, data->gyro_z);
     }
     
-    printf("\n");
+    LOG_INFO("\n");
 }
 
 // ==============================
@@ -342,11 +343,11 @@ void pid_controller_init(pid_config_t *config, pid_state_t *state) {
     state->integral = 0.0f;
     state->enabled = true;
     
-    printf("PID Controller Initialized\n");
-    printf("KP: %.3f, KI: %.3f, KD: %.3f\n", config->kp, config->ki, config->kd);
-    printf("Setpoint: %.1f°, Base Speed Left: %.1f, Base Speed Right: %.1f, Max Output: %.1f\n", 
+    LOG_INFO("PID Controller Initialized\n");
+    LOG_INFO("KP: %.3f, KI: %.3f, KD: %.3f\n", config->kp, config->ki, config->kd);
+    LOG_INFO("Setpoint: %.1f deg, Base Speed Left: %.1f, Base Speed Right: %.1f, Max Output: %.1f\n", 
            config->setpoint, config->base_speed_left, config->base_speed_right, config->max_output);
-    printf("Using YAW angle for heading control\n");
+    LOG_INFO("Using YAW angle for heading control\n");
 }
 
 float progressive_pid_controller_update(float current_yaw, pid_config_t *config, pid_state_t *state) {
@@ -469,7 +470,7 @@ void drive_to_yaw_setpoint(float current_yaw, pid_config_t *config, pid_state_t 
     if (*right_speed < -100.0f) *right_speed = -100.0f;
     
     // Apply motor control
-    printf("THE SPEEDS ARRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRE: L=%.1f R=%.1f\n", *left_speed, *right_speed);
+    LOG_INFO("THE SPEEDS ARRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRE: L=%.1f R=%.1f\n", *left_speed, *right_speed);
     drive_signed(*left_speed, *right_speed);
 }
 
@@ -490,8 +491,8 @@ pid_state_t* get_pid_state(void) {
 // ==============================
 
 bool detect_initial_setpoint(int samples) {
-    printf("Detecting initial heading (yaw)...\n");
-    printf("Please keep the robot stationary for %d samples...\n", samples);
+    LOG_INFO("Detecting initial heading (yaw)...\n");
+    LOG_INFO("Please keep the robot stationary for %d samples...\n", samples);
     
     float sum_yaw = 0.0f;
     int successful_samples = 0;
@@ -501,9 +502,9 @@ bool detect_initial_setpoint(int samples) {
         if (read_imu_data(&data)) {
             sum_yaw += data.yaw;
             successful_samples++;
-            printf("Sample %d/%d: Yaw = %.1f°\n", i + 1, samples, data.yaw);
+            LOG_INFO("Sample %d/%d: Yaw = %.1f deg\n", i + 1, samples, data.yaw);
         } else {
-            printf("Sample %d/%d: Failed to read IMU data\n", i + 1, samples);
+            LOG_INFO("Sample %d/%d: Failed to read IMU data\n", i + 1, samples);
         }
         sleep_ms(100); // 10Hz sampling for detection
     }
@@ -512,12 +513,12 @@ bool detect_initial_setpoint(int samples) {
         float average_yaw = sum_yaw / successful_samples;
         pid_config.setpoint = average_yaw;
         
-        printf("Initial setpoint detection complete!\n");
-        printf("Successful samples: %d/%d\n", successful_samples, samples);
-        printf("Average Yaw: %.1f° (set as setpoint)\n", average_yaw);
+        LOG_INFO("Initial setpoint detection complete!\n");
+        LOG_INFO("Successful samples: %d/%d\n", successful_samples, samples);
+        LOG_INFO("Average Yaw: %.1f deg (set as setpoint)\n", average_yaw);
         return true;
     } else {
-        printf("ERROR: Failed to detect initial setpoint - no successful readings\n");
+        LOG_INFO("ERROR: Failed to detect initial setpoint - no successful readings\n");
         return false;
     }
 }
@@ -528,14 +529,14 @@ bool detect_initial_setpoint(int samples) {
 
 void set_yaw_setpoint(float target_yaw) {
     pid_config.setpoint = normalize_angle(target_yaw);
-    printf("Yaw setpoint updated to: %.1f°\n", pid_config.setpoint);
+    LOG_INFO("Yaw setpoint updated to: %.1f deg\n", pid_config.setpoint);
 }
 
 // ==============================
 // FREE RTOS TASK FUNCTION (Updated with speed calculation)
 // ==============================
 void imu_movement_task(__unused void *params) {
-    printf("IMU Movement Task Started\n");
+    LOG_INFO("IMU Movement Task Started\n");
     
     // Initialize IMU
     imu_movement_init();
@@ -583,13 +584,13 @@ void imu_movement_task(__unused void *params) {
                 float current_speed = imu_get_current_speed_cm_s();
                 float total_distance = imu_get_total_distance_cm();
                 
-                printf("[IMU] Yaw: %.1f° | Setpoint: %.1f° | Error: %.1f° | PID: %.1f | L: %.1f | R: %.1f | Speed: %.1f cm/s | Dist: %.1f cm\n",
+                LOG_INFO("[IMU] Yaw: %.1f deg | Setpoint: %.1f deg | Error: %.1f deg | PID: %.1f | L: %.1f | R: %.1f | Speed: %.1f cm/s | Dist: %.1f cm\n",
                        current_data.yaw, pid_config.setpoint, error, pid_output, left_speed, right_speed, 
                        current_speed, total_distance);
                 last_print_time = current_time;
             }
         } else {
-            printf("[IMU] Failed to read sensor data\n");
+            LOG_INFO("[IMU] Failed to read sensor data\n");
         }
         
         // Handle MQTT polling
@@ -608,11 +609,11 @@ static void imu_robot_task(void *pv) {
     // optional: small delay to let USB come up
     vTaskDelay(pdMS_TO_TICKS(100));
     
-    printf("\n\n=== IMU Movement System with YAW PID Control and MQTT ===\n");
-    printf("Initializing IMU...\n");
+    LOG_INFO("\n\n=== IMU Movement System with YAW PID Control and MQTT ===\n");
+    LOG_INFO("Initializing IMU...\n");
     
     if (!wifi_and_mqtt_start()) {
-        printf("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
+        LOG_INFO("[NET] Wi-Fi/MQTT start failed (continuing without MQTT)\n");
     }
     
     // Initialize the IMU movement system (includes speed calculation)
@@ -622,17 +623,17 @@ static void imu_robot_task(void *pv) {
     motor_encoder_init();
     
     // Detect initial setpoint automatically
-    printf("\n=== Auto-Setpoint Detection ===\n");
+    LOG_INFO("\n=== Auto-Setpoint Detection ===\n");
     if (!detect_initial_setpoint(10)) { // Take 10 samples for averaging
-        printf("Falling back to manual setpoint: 0.0°\n");
+        LOG_INFO("Falling back to manual setpoint: 0.0 deg\n");
         pid_config.setpoint = 140.0f; // Fallback value
     }
     
     // Initialize PID controller with detected setpoint
     pid_controller_init(NULL, NULL);
     
-    printf("\nStarting IMU data reading loop with PID control and MQTT telemetry...\n");
-    printf("Format: Yaw: [angle]° | Setpoint: [angle]° | Error: [error]° | PID: [output] | L: [left_speed] | R: [right_speed] | Speed: [speed] cm/s | Dist: [distance] cm\n\n");
+    LOG_INFO("\nStarting IMU data reading loop with PID control and MQTT telemetry...\n");
+    LOG_INFO("Format: Yaw: [angle] deg | Setpoint: [angle] deg | Error: [error] deg | PID: [output] | L: [left_speed] | R: [right_speed] | Speed: [speed] cm/s | Dist: [distance] cm\n\n");
     
     imu_data_t imu_data;
     uint32_t last_print_time = 0;
@@ -680,14 +681,14 @@ static void imu_robot_task(void *pv) {
                 float current_speed = imu_get_current_speed_cm_s();
                 float total_distance = imu_get_total_distance_cm();
                 
-                printf("Yaw: %6.1f° | Setpoint: %6.1f° | Error: %6.1f° | PID: %6.1f | L: %6.1f | R: %6.1f | Speed: %6.1f cm/s | Dist: %6.1f cm\n",
+                LOG_INFO("Yaw: %6.1f deg | Setpoint: %6.1f deg | Error: %6.1f deg | PID: %6.1f | L: %6.1f | R: %6.1f | Speed: %6.1f cm/s | Dist: %6.1f cm\n",
                        imu_data.yaw, pid_config.setpoint, error, pid_output, left_speed, right_speed, 
                        current_speed, total_distance);
                 last_print_time = current_time;
                 //pid_config.setpoint += 0.4f; // Increment setpoint for testing
             }
         } else {
-            printf("[ERROR] Failed to read IMU data - Stopping motors\n");
+            LOG_INFO("[ERROR] Failed to read IMU data - Stopping motors\n");
             // Stop motors on sensor failure
         }
         
@@ -700,26 +701,3 @@ static void imu_robot_task(void *pv) {
     
     vTaskDelete(NULL); // never reached, but good practice
 }
-
-// int main(void) {
-//     stdio_init_all();
-
-//     // Wait for serial connection to be established
-//     sleep_ms(4000);
-
-//     // Create the IMU robot task
-//     xTaskCreate(
-//         imu_robot_task, 
-//         "imu_robot",
-//         4096,                  // stack words
-//         NULL,
-//         tskIDLE_PRIORITY + 2,  // priority
-//         NULL
-//     );
-
-//     // Start FreeRTOS
-//     vTaskStartScheduler();
-
-//     // Should never return
-//     while (1) { /* idle */ }
-// }

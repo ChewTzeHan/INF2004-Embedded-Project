@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
+#include "log.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
@@ -29,7 +30,7 @@ typedef enum {
 static volatile robot_state_t current_state = STATE_LINE_FOLLOWING;
 static volatile bool system_active = true;
 static volatile bool obstacle_detected_flag = false;
-static volatile char pending_turn_direction[10] = ""; // Store turn direction after barcode scan
+static char pending_turn_direction[10] = ""; // Store turn direction after barcode scan
 static SemaphoreHandle_t obstacle_mutex;
 static SemaphoreHandle_t state_mutex;
 static SemaphoreHandle_t turn_mutex;
@@ -45,7 +46,7 @@ bool barcode_scan_only(barcode_result_t *result, char *nw_pattern, size_t patter
 static void obstacle_detection_task(void *pv) {
     const TickType_t check_interval = pdMS_TO_TICKS(300); // Check every 300ms
     
-    printf("[OBSTACLE_TASK] Obstacle detection task started\n");
+    LOG_INFO("[OBSTACLE_TASK] Obstacle detection task started\n");
     
     while (1) {
         // Use the fast detection function
@@ -53,7 +54,7 @@ static void obstacle_detection_task(void *pv) {
             xSemaphoreTake(obstacle_mutex, portMAX_DELAY);
             obstacle_detected_flag = true;
             xSemaphoreGive(obstacle_mutex);
-            printf("[OBSTACLE_TASK] Obstacle detected!\n");
+            LOG_INFO("[OBSTACLE_TASK] Obstacle detected!\n");
         }
         vTaskDelay(check_interval);
     }
@@ -63,14 +64,14 @@ static void obstacle_detection_task(void *pv) {
 static void barcode_detection_task(void *pv) {
     const TickType_t check_interval = pdMS_TO_TICKS(100); // Check every 100ms (barcode is fast)
     
-    printf("[BARCODE_TASK] Barcode detection task started\n");
+    LOG_INFO("[BARCODE_TASK] Barcode detection task started\n");
     
     while (1) {
         if (check_barcode_detection()) {
             xSemaphoreTake(state_mutex, portMAX_DELAY);
             if (current_state == STATE_LINE_FOLLOWING) {
                 current_state = STATE_BARCODE_SCANNING;
-                printf("[BARCODE_TASK] Barcode detected - switching to scanning mode\n");
+                LOG_INFO("[BARCODE_TASK] Barcode detected - switching to scanning mode\n");
                 all_stop();
                 sleep_ms(1000);
                 
@@ -89,7 +90,7 @@ static void barcode_detection_task(void *pv) {
 static void junction_detection_task(void *pv) {
     const TickType_t check_interval = pdMS_TO_TICKS(50); // Check every 50ms for fast response
     
-    printf("[JUNCTION_TASK] Junction detection task started\n");
+    LOG_INFO("[JUNCTION_TASK] Junction detection task started\n");
     
     while (1) {
         xSemaphoreTake(state_mutex, portMAX_DELAY);
@@ -97,7 +98,7 @@ static void junction_detection_task(void *pv) {
         xSemaphoreGive(state_mutex);
         
         if (should_check_junction && check_barcode_detection()) {
-            printf("[JUNCTION_TASK] Junction detected! Executing turn...\n");
+            LOG_INFO("[JUNCTION_TASK] Junction detected! Executing turn...\n");
             xSemaphoreTake(state_mutex, portMAX_DELAY);
             current_state = STATE_EXECUTING_TURN;
             xSemaphoreGive(state_mutex);
@@ -107,21 +108,21 @@ static void junction_detection_task(void *pv) {
 }
 
 void execute_turn_command(const char* direction) {
-    printf("Executing turn command: %s\n", direction);
+    LOG_INFO("Executing turn command: %s\n", direction);
     
     // Stop and stabilize before turn
     all_stop();
     sleep_ms(1000);
     
     if (strcmp(direction, "RIGHT") == 0) {
-        printf("Turning RIGHT at junction\n");
+        LOG_INFO("Turning RIGHT at junction\n");
         // Right turn sequence
         drive_signed(40, 40);
         sleep_ms(500);
         drive_signed(-40, 60); // Right turn
         sleep_ms(500);
     } else {
-        printf("Turning LEFT at junction\n");
+        LOG_INFO("Turning LEFT at junction\n");
         // Left turn sequence (default)
         drive_signed(40, -40); // Left turn
         sleep_ms(500);
@@ -129,7 +130,7 @@ void execute_turn_command(const char* direction) {
     
     all_stop();
     sleep_ms(1500);
-    printf("Turn completed\n");
+    LOG_INFO("Turn completed\n");
 }
 
 // Main robot control task
@@ -140,7 +141,7 @@ static void robot_control_task(void *pv) {
     bool telemetry_initialized = false;
     bool obstacle_done = false;
     
-    printf("[CONTROL_TASK] Starting main control loop\n");
+    LOG_INFO("[CONTROL_TASK] Starting main control loop\n");
     
     // Initialize speed calculation system (like obstacle_avoidance.c does)
     speed_calc_init();
@@ -157,7 +158,7 @@ static void robot_control_task(void *pv) {
             // Debug: Print speed/distance values to verify they're updating
             static uint32_t last_debug_time = 0;
             if (now - last_debug_time >= 1000) {
-                printf("[SPEED_DEBUG] Speed: %.2f cm/s, Distance: %.2f cm\n", 
+                LOG_INFO("[SPEED_DEBUG] Speed: %.2f cm/s, Distance: %.2f cm\n", 
                        get_current_speed_cm_s(), get_total_distance_cm());
                 last_debug_time = now;
             }
@@ -184,14 +185,14 @@ static void robot_control_task(void *pv) {
             }
             
             // Debug output to verify values
-            printf("[TELEMETRY] Speed: %.2f cm/s, Distance: %.2f cm, Yaw: %.2f°, Ultra: %.2f cm, State: %s\n", 
+            LOG_INFO("[TELEMETRY] Speed: %.2f cm/s, Distance: %.2f cm, Yaw: %.2f deg, Ultra: %.2f cm, State: %s\n", 
                    speed, distance, yaw, ultra, state_str);
             
             mqtt_publish_telemetry(speed, distance, yaw, ultra, state_str);
             last_telemetry_time = now;
             
             if (!telemetry_initialized) {
-                printf("Telemetry system active\n");
+                LOG_INFO("Telemetry system active\n");
                 telemetry_initialized = true;
             }
         }
@@ -215,7 +216,7 @@ static void robot_control_task(void *pv) {
                 xSemaphoreGive(obstacle_mutex);
                 
                 if (!obstacle_done && obstacle_found) {
-                    printf("🚨 OBSTACLE DETECTED - Switching to avoidance mode\n");
+                    LOG_INFO("[ALERT] OBSTACLE DETECTED - Switching to avoidance mode\n");
                     xSemaphoreTake(state_mutex, portMAX_DELAY);
                     current_state = STATE_OBSTACLE_AVOIDANCE;
                     xSemaphoreGive(state_mutex);
@@ -240,7 +241,7 @@ static void robot_control_task(void *pv) {
                     avoid_obstacle_only();
                     
                     // Return to line following
-                    printf("✅ Obstacle avoidance completed - Returning to line following\n");
+                    LOG_INFO("Obstacle avoidance completed - Returning to line following\n");
                     xSemaphoreTake(state_mutex, portMAX_DELAY);
                     current_state = STATE_LINE_FOLLOWING;
                     xSemaphoreGive(state_mutex);
@@ -273,7 +274,7 @@ static void robot_control_task(void *pv) {
                     
                     if (barcode_scan_only(&scan_result, nw_pattern, sizeof(nw_pattern), 
                                         timing_str, sizeof(timing_str), direction_str, sizeof(direction_str))) {
-                        printf("✅ Barcode decoded: '%s', Direction: %s\n", scan_result.data, direction_str);
+                        LOG_INFO("Barcode decoded: '%s', Direction: %s\n", scan_result.data, direction_str);
                         
                         // Store the turn direction and wait for junction
                         xSemaphoreTake(turn_mutex, portMAX_DELAY);
@@ -285,7 +286,7 @@ static void robot_control_task(void *pv) {
                         current_state = STATE_WAITING_FOR_JUNCTION;
                         xSemaphoreGive(state_mutex);
                         
-                        printf("🔄 Waiting for junction to execute %s turn...\n", direction_str);
+                        LOG_INFO("[STATE] Waiting for junction to execute %s turn...\n", direction_str);
                         
                         // Send telemetry with current values
                         float speed = get_current_speed_cm_s();
@@ -295,12 +296,12 @@ static void robot_control_task(void *pv) {
                         float yaw = get_heading_fast(&direction);
                         
                         char result_msg[100];
-                        snprintf(result_msg, sizeof(result_msg), "BARCODE_SCANNED: %s -> %s (Waiting for junction)", 
+                        snLOG_INFO(result_msg, sizeof(result_msg), "BARCODE_SCANNED: %s -> %s (Waiting for junction)", 
                                 scan_result.data, direction_str);
                         mqtt_publish_telemetry(speed, distance, yaw, ultra, result_msg);
                         
                     } else {
-                        printf("❌ Barcode scan failed - Using default RIGHT turn\n");
+                        LOG_INFO("Barcode scan failed - Using default RIGHT turn\n");
                         
                         // Store default turn direction
                         xSemaphoreTake(turn_mutex, portMAX_DELAY);
@@ -312,7 +313,7 @@ static void robot_control_task(void *pv) {
                         current_state = STATE_WAITING_FOR_JUNCTION;
                         xSemaphoreGive(state_mutex);
                         
-                        printf("🔄 Waiting for junction to execute default RIGHT turn...\n");
+                        LOG_INFO("Waiting for junction to execute default RIGHT turn...\n");
                         
                         // Send telemetry with current values
                         float speed = get_current_speed_cm_s();
@@ -322,7 +323,7 @@ static void robot_control_task(void *pv) {
                         float yaw = get_heading_fast(&direction);
                         
                         char result_msg[100];
-                        snprintf(result_msg, sizeof(result_msg), "BARCODE_SCANNED: C -> RIGHT (Waiting for junction)");
+                        snLOG_INFO(result_msg, sizeof(result_msg), "BARCODE_SCANNED: C -> RIGHT (Waiting for junction)");
                         mqtt_publish_telemetry(speed, distance, yaw, ultra, result_msg);
                     }
                 }
@@ -345,7 +346,7 @@ static void robot_control_task(void *pv) {
                     execute_turn_command(turn_dir);
                     
                     // Return to line following
-                    printf("Returning to line following mode\n");
+                    LOG_INFO("Returning to line following mode\n");
                     xSemaphoreTake(state_mutex, portMAX_DELAY);
                     current_state = STATE_LINE_FOLLOWING;
                     xSemaphoreGive(state_mutex);
@@ -358,7 +359,7 @@ static void robot_control_task(void *pv) {
                     float yaw = get_heading_fast(&direction);
                     
                     char turn_msg[100];
-                    snprintf(turn_msg, sizeof(turn_msg), "TURN_COMPLETED: %s", turn_dir);
+                    snLOG_INFO(turn_msg, sizeof(turn_msg), "TURN_COMPLETED: %s", turn_dir);
                     mqtt_publish_telemetry(speed, distance, yaw, ultra, turn_msg);
                     
                     sleep_ms(1000);
@@ -376,7 +377,7 @@ void initialize_all_systems(void) {
     stdio_init_all();
     sleep_ms(2000);
     
-    printf("=== INTEGRATED ROBOT SYSTEM INITIALIZATION ===\n");
+    LOG_INFO("=== INTEGRATED ROBOT SYSTEM INITIALIZATION ===\n");
     
     // Create mutexes FIRST
     obstacle_mutex = xSemaphoreCreateMutex();
@@ -384,7 +385,7 @@ void initialize_all_systems(void) {
     turn_mutex = xSemaphoreCreateMutex();
     
     if (obstacle_mutex == NULL || state_mutex == NULL || turn_mutex == NULL) {
-        printf("ERROR: Failed to create mutexes\n");
+        LOG_INFO("ERROR: Failed to create mutexes\n");
         return;
     }
     
@@ -401,25 +402,25 @@ void initialize_all_systems(void) {
     
     imu_init();
     servo_init();
-    printf("All hardware systems initialized successfully!\n");
+    LOG_INFO("All hardware systems initialized successfully!\n");
 }
 
 // WiFi connection task
 static void wifi_connection_task(void *pv) {
-    printf("[WIFI_TASK] Starting WiFi connection...\n");
+    LOG_INFO("[WIFI_TASK] Starting WiFi connection...\n");
     
     // Try to connect to WiFi (blocking call)
     bool wifi_connected = wifi_and_mqtt_start();
     
     if (wifi_connected) {
-        printf("[WIFI_TASK] ✅ WiFi connected successfully!\n");
-        //printf("[WIFI_TASK] Local IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
+        LOG_INFO("[WIFI_TASK] WiFi connected successfully!\n");
+        //LOG_INFO("[WIFI_TASK] Local IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
     } else {
-        printf("[WIFI_TASK] ❌ WiFi connection failed, continuing without network\n");
+        LOG_INFO("[WIFI_TASK] WiFi connection failed, continuing without network\n");
     }
     
     // Now that WiFi is done (success or failure), start the robot tasks
-    printf("[WIFI_TASK] Starting robot tasks...\n");
+    LOG_INFO("[WIFI_TASK] Starting robot tasks...\n");
     
     // Create detection tasks with higher priority than control task
     xTaskCreate(obstacle_detection_task, "obstacle_det", 1024, NULL, tskIDLE_PRIORITY + 2, NULL);
@@ -429,7 +430,7 @@ static void wifi_connection_task(void *pv) {
     // Create control task with normal priority
     xTaskCreate(robot_control_task, "robot_control", 4096, NULL, tskIDLE_PRIORITY + 1, NULL);
     
-    printf("[WIFI_TASK] All robot tasks created. Starting in LINE FOLLOWING mode...\n");
+    LOG_INFO("[WIFI_TASK] All robot tasks created. Starting in LINE FOLLOWING mode...\n");
     
     // Delete this WiFi task since it's no longer needed
     vTaskDelete(NULL);
@@ -442,7 +443,7 @@ static void init_task(void *pv) {
     // Create WiFi connection task (this will create robot tasks when done)
     xTaskCreate(wifi_connection_task, "wifi_conn", 2048, NULL, tskIDLE_PRIORITY + 3, NULL);
     
-    printf("[INIT_TASK] WiFi connection task created. Waiting for network...\n");
+    LOG_INFO("[INIT_TASK] WiFi connection task created. Waiting for network...\n");
     
     // Delete this initialization task since it's no longer needed
     vTaskDelete(NULL);

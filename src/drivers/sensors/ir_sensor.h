@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-// Add these definitions to ir_sensor.h
+// Digital IR sensor pin used for barcode / line detection.
 #ifndef RIGHT_IR_DIGITAL_PIN
 #define RIGHT_IR_DIGITAL_PIN 3  // GPIO pin for right IR digital output
 #endif
@@ -32,7 +32,7 @@ extern "C" {
 
 // Hysteresis margin in ADC counts (to avoid flicker around threshold).
 #ifndef IR_HYST_MARGIN
-#define IR_HYST_MARGIN 50// ~50/4096 ≈ 1.2%
+#define IR_HYST_MARGIN 50// ~50/4096 ≈= 1.2%
 #endif
 
 typedef struct {
